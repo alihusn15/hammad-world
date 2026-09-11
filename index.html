@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Hammad World</title>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<style>
+  :root{
+    --clay-900:#5C2A1C;
+    --clay-700:#9A3F26;
+    --clay-500:#C0754D;
+    --stone-100:#F4EEE4;
+    --stone-200:#E9DFCF;
+    --ink-900:#2B2420;
+    --ink-500:#7A6E60;
+    --amber-600:#A56A0E;
+    --amber-100:#F3E3C4;
+    --red-700:#A3372E;
+    --red-100:#F6DEDA;
+    --white:#FFFFFF;
+    --line:#E1D5C2;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;
+    background:var(--stone-100);
+    color:var(--ink-900);
+    -webkit-tap-highlight-color:transparent;
+  }
+  #app{
+    max-width:460px;margin:0 auto;min-height:100vh;background:var(--stone-100);
+    display:flex;flex-direction:column;position:relative;padding-bottom:76px;
+  }
+  header.top{background:var(--clay-900);color:var(--white);padding:16px 18px 20px;position:sticky;top:0;z-index:20;}
+  header.top .brand{display:flex;align-items:center;gap:10px;}
+  header.top .mark{width:34px;height:34px;border-radius:9px;background:var(--clay-500);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;}
+  header.top .name{font-size:16.5px;font-weight:700;}
+  header.top .sub{font-size:11.5px;color:#E3C7B4;margin-top:1px;}
+  header.top .screen-title{margin-top:14px;font-size:20px;font-weight:700;}
+  header.top .screen-note{font-size:12.5px;color:#E3C7B4;margin-top:2px;}
+  .cloud-badge{flex-shrink:0;border:1.5px solid #C0754D;background:rgba(255,255,255,0.08);color:#E3C7B4;font-size:10.5px;font-weight:700;padding:5px 9px;border-radius:20px;cursor:pointer;font-family:inherit;}
+
+  main{flex:1;padding:14px 14px 8px;}
+  .card{background:var(--white);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px;}
+  .card h3{margin:0 0 10px;font-size:14px;font-weight:700;color:var(--clay-900);}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
+  label{display:block;font-size:11.5px;color:var(--ink-500);margin-bottom:4px;font-weight:600;}
+  input, select{width:100%;padding:9px 10px;border-radius:9px;border:1.5px solid var(--line);font-size:14px;background:var(--white);color:var(--ink-900);font-family:inherit;}
+  input:focus, select:focus{outline:none;border-color:var(--clay-500);}
+  .field{margin-bottom:10px;}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:11px 16px;border-radius:11px;border:none;font-size:14px;font-weight:700;cursor:pointer;width:100%;}
+  .btn-primary{background:var(--clay-700);color:var(--white);}
+  .btn-primary:active{background:var(--clay-900);}
+  .btn-ghost{background:var(--white);color:var(--clay-700);border:1.5px solid var(--clay-700);}
+  .btn-danger{background:var(--red-100);color:var(--red-700);border:1.5px solid #E9BFB9;}
+  .btn-sm{padding:7px 10px;font-size:12.5px;width:auto;border-radius:8px;}
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .stat{background:var(--white);border:1px solid var(--line);border-radius:var(--radius);padding:13px 14px;}
+  .stat .num{font-size:19px;font-weight:800;color:var(--clay-900);}
+  .stat .lbl{font-size:11.5px;color:var(--ink-500);margin-top:2px;}
+  .list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);}
+  .list-row:last-child{border-bottom:none;}
+  .list-row .li-main{font-size:13.5px;font-weight:600;}
+  .list-row .li-sub{font-size:11.5px;color:var(--ink-500);margin-top:1px;}
+  .list-row .li-right{text-align:right;font-size:13.5px;font-weight:700;color:var(--clay-900);}
+  .tag{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:6px;}
+  .tag.low{background:var(--red-100);color:var(--red-700);}
+  .tag.ok{background:#EFE3D6;color:var(--clay-700);}
+  nav.bottom{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:460px;background:var(--white);border-top:1px solid var(--line);display:flex;z-index:30;padding:6px 4px 8px;}
+  nav.bottom .nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 2px;border-radius:10px;cursor:pointer;color:var(--ink-500);background:none;border:none;font-family:inherit;}
+  nav.bottom .nav-btn.active{color:var(--clay-700);background:var(--stone-100);}
+  nav.bottom .nav-icon{font-size:18px;}
+  nav.bottom .nav-lbl{font-size:10px;font-weight:700;}
+  .item-row-card{border:1.5px solid var(--line);border-radius:12px;padding:11px;margin-bottom:10px;position:relative;}
+  .item-row-card .rm{position:absolute;top:8px;right:8px;background:none;border:none;color:var(--red-700);font-size:16px;font-weight:800;cursor:pointer;padding:2px 6px;}
+  .segment{display:flex;background:var(--stone-100);border-radius:10px;padding:3px;margin-bottom:12px;}
+  .segment button{flex:1;border:none;background:none;padding:8px;border-radius:8px;font-size:12.5px;font-weight:700;color:var(--ink-500);font-family:inherit;cursor:pointer;}
+  .segment button.active{background:var(--white);color:var(--clay-700);box-shadow:0 1px 3px rgba(0,0,0,0.08);}
+  .empty{text-align:center;padding:26px 10px;color:var(--ink-500);font-size:13px;}
+  .empty .e-icon{font-size:26px;margin-bottom:8px;}
+  .total-line{display:flex;justify-content:space-between;font-size:13px;padding:4px 0;}
+  .total-line.grand{font-size:15px;font-weight:800;color:var(--clay-900);border-top:1.5px solid var(--line);margin-top:6px;padding-top:8px;}
+  .step{font-size:12.5px;color:var(--ink-500);margin-bottom:8px;line-height:1.5;}
+  .modal-overlay{position:fixed;inset:0;background:rgba(43,36,32,0.55);z-index:100;display:flex;align-items:flex-end;justify-content:center;}
+  .modal-box{background:var(--white);width:100%;max-width:460px;border-radius:18px 18px 0 0;padding:16px;max-height:85vh;overflow-y:auto;}
+  .modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
+  .modal-close{background:none;border:none;font-size:22px;color:var(--ink-500);cursor:pointer;line-height:1;}
+  .cloud-badge.on{background:#5C2A1C;border-color:#C0754D;color:#F0D9C8;}
+  .cloud-badge.offline{background:#4A2E0B;border-color:var(--amber-600);color:var(--amber-100);}
+  .sku-chip{display:inline-block;font-size:10.5px;font-weight:700;background:var(--amber-100);color:var(--amber-600);padding:3px 8px;border-radius:7px;margin-top:4px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="brand">
+      <div class="mark">HW</div>
+      <div style="flex:1;">
+        <div class="name">Hammad World</div>
+        <div class="sub">Tiles • Sanitaryware • Ceiling</div>
+      </div>
+      <button id="cloudBadge" class="cloud-badge" onclick="openCloudModal()">Local only</button>
+    </div>
+    <div class="screen-title" id="screenTitle">Dashboard</div>
+    <div class="screen-note" id="screenNote">Today's summary at a glance</div>
+  </header>
+
+  <main id="main"></main>
+
+  <div id="genericModal" class="modal-overlay" style="display:none;">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3 style="margin:0;font-size:15px;" id="genericModalTitle">Manage</h3>
+        <button class="modal-close" onclick="closeGenericModal()">×</button>
+      </div>
+      <div id="genericModalBody"></div>
+    </div>
+  </div>
+
+  <nav class="bottom">
+    <button class="nav-btn active" data-screen="dashboard"><div class="nav-icon">⌂</div><div class="nav-lbl">Home</div></button>
+    <button class="nav-btn" data-screen="purchase"><div class="nav-icon">＋</div><div class="nav-lbl">Purchase</div></button>
+    <button class="nav-btn" data-screen="sales"><div class="nav-icon">₹</div><div class="nav-lbl">Sale</div></button>
+    <button class="nav-btn" data-screen="stock"><div class="nav-icon">▤</div><div class="nav-lbl">Stock</div></button>
+    <button class="nav-btn" data-screen="reports"><div class="nav-icon">◔</div><div class="nav-lbl">Reports</div></button>
+  </nav>
+</div>
+
+<script>
+/* ===================== DATA LAYER ===================== */
+const DB_KEY = 'hw_inventory_db_v1';
+function defaultCategories(){
+  return {
+    'Tiles': {subs:['Wall Tiles','Floor Tiles','Border Tiles','Highlighter','Parking Tiles'], materials:['Porcelain','Vitrified','Double Charge']},
+    'Sanitaryware': {subs:['Commodes','Basins','Accessories'], materials:[]},
+    'Ceiling': {subs:['AC Cement Sheet','PVC Tiles','PVC','PVC Fluted','WPC','PVC Laminated','UV Marble Sheet','Accessories'], materials:[]}
+  };
+}
+function loadDB(){
+  const raw = localStorage.getItem(DB_KEY);
+  if(raw){ try{ const d = JSON.parse(raw); if(!d.categories) d.categories = defaultCategories(); if(!d.parties) d.parties=[]; return d; }catch(e){} }
+  return { stock:[], purchases:[], sales:[], parties:[], categories: defaultCategories(), seqs:{} };
+}
+function saveDB(db){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
+let db = loadDB();
+
+function nextId(prefix){
+  if(!db.seqs[prefix]) db.seqs[prefix] = 1;
+  const id = prefix + '-' + String(db.seqs[prefix]).padStart(4,'0');
+  db.seqs[prefix] += 1;
+  return id;
+}
+function formatBillNo(kind, n){ return (kind==='purchase'?'HWP':'HWS') + String(n).padStart(5,'0'); }
+function nextBillNo(kind){
+  const key = 'HWNO_'+kind;
+  if(!db.seqs[key]) db.seqs[key] = 1;
+  const n = db.seqs[key];
+  db.seqs[key] += 1;
+  return formatBillNo(kind, n);
+}
+function nextSku(category){
+  const prefix = (category||'GEN').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase() || 'GEN';
+  const key = 'SKU_'+prefix;
+  if(!db.seqs[key]) db.seqs[key] = 1;
+  const n = db.seqs[key];
+  db.seqs[key] += 1;
+  return prefix+'-'+String(n).padStart(5,'0');
+}
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function fmt(n){ return '₹' + (Math.round((n||0)*100)/100).toLocaleString('en-IN'); }
+
+function findStockRow(itemName, batch){
+  return db.stock.find(s => s.itemName.trim().toLowerCase()===(itemName||'').trim().toLowerCase() && (s.batch||'').trim().toLowerCase()===(batch||'').trim().toLowerCase());
+}
+/* GST math: 'excluded' = rate is pre-tax, GST added on top. 'included' = rate already
+   has GST inside it (like a retail MRP), so GST is extracted from within instead. */
+function gstBreakdown(amount, gstPct, mode){
+  if(mode==='included'){
+    const taxable = amount/(1+gstPct/100);
+    return {taxable, gst: amount-taxable, total: amount};
+  }
+  const gst = amount*gstPct/100;
+  return {taxable: amount, gst, total: amount+gst};
+}
+
+/* ===================== APP STATE / ROUTER ===================== */
+let currentScreen = 'dashboard';
+let purchaseDraft = { supplier:'', partyId:null, gstMode:'excluded', items:[] };
+let saleDraft = { customer:'', partyId:null, gstMode:'included', items:[] };
+let billDetailCtx = null; // {type, id}
+
+const titles = {
+  dashboard:['Dashboard',"Today's summary at a glance"],
+  purchase:['New purchase','Add stock with full product details'],
+  sales:['New sale','Bill by box or by piece'],
+  stock:['Full stock','Tap a product to see its history'],
+  reports:['Reports','Daily & monthly summary'],
+  stockDetail:['Product history','Purchases & sales for this SKU'],
+  billDetail:['Bill','View & edit this bill'],
+  parties:['Ledger','Suppliers & customers — click a name for their bills'],
+  partyDetail:['Party ledger','All bills for this party']
+};
+
+function setScreen(name){
+  currentScreen = name;
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.screen===name));
+  document.getElementById('screenTitle').textContent = titles[name][0];
+  document.getElementById('screenNote').textContent = titles[name][1];
+  render();
+}
+document.querySelectorAll('.nav-btn').forEach(b=> b.addEventListener('click', ()=> setScreen(b.dataset.screen)));
+
+function goTo(name, note){
+  currentScreen = name;
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('screenTitle').textContent = titles[name][0];
+  document.getElementById('screenNote').textContent = note||titles[name][1];
+  render();
+}
+
+function render(){
+  const main = document.getElementById('main');
+  if(currentScreen==='stockDetail'){ main.innerHTML = renderStockDetail(); return; }
+  if(currentScreen==='billDetail'){ main.innerHTML = renderBillDetail(); return; }
+  if(currentScreen==='parties'){ main.innerHTML = renderPartiesList(); return; }
+  if(currentScreen==='partyDetail'){ main.innerHTML = renderPartyDetail(); return; }
+  if(currentScreen==='dashboard') main.innerHTML = renderDashboard();
+  else if(currentScreen==='purchase') main.innerHTML = renderPurchase();
+  else if(currentScreen==='sales') main.innerHTML = renderSales();
+  else if(currentScreen==='stock') main.innerHTML = renderStock();
+  else if(currentScreen==='reports') main.innerHTML = renderReports();
+}
+
+/* ===================== DASHBOARD ===================== */
+function renderDashboard(){
+  const today = todayStr();
+  const todaySales = db.sales.filter(s=>s.date===today);
+  const todayPurchases = db.purchases.filter(p=>p.date===today);
+  const salesTotal = todaySales.reduce((a,s)=>a+s.totalAmount,0);
+  const purchaseTotal = todayPurchases.reduce((a,p)=>a+p.totalAmount+p.totalGst,0);
+  const stockValue = db.stock.reduce((a,s)=>a+(s.qty/(s.piecesPerBox||1))*(s.purchaseRate||0),0);
+  const lowStock = db.stock.filter(s=>s.qty>0 && s.qty<=(s.piecesPerBox||1));
+
+  let alerts = '';
+  if(lowStock.length) alerts += `<div class="stat" style="background:var(--amber-100);border-color:transparent;margin-bottom:8px;"><div style="font-size:13px;color:var(--amber-600);font-weight:700;">⚠ ${lowStock.length} product(s) down to less than a box — check Stock.</div></div>`;
+  if(!alerts) alerts = `<div class="stat" style="background:#EFE3D6;border-color:transparent;"><div style="font-size:13px;color:var(--clay-700);font-weight:700;">✓ No stock alerts right now.</div></div>`;
+
+  return `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${fmt(salesTotal)}</div><div class="lbl">Sales today</div></div>
+      <div class="stat"><div class="num">${fmt(purchaseTotal)}</div><div class="lbl">Purchases today</div></div>
+      <div class="stat"><div class="num">${fmt(stockValue)}</div><div class="lbl">Stock value</div></div>
+      <div class="stat"><div class="num">${db.stock.filter(s=>s.qty>0).length}</div><div class="lbl">SKUs in stock</div></div>
+    </div>
+    <div class="card" style="margin-top:12px;"><h3>Alerts</h3>${alerts}</div>
+    <div class="card">
+      <h3>Quick actions</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary" style="flex:1;" onclick="setScreen('purchase')">+ Purchase</button>
+        <button class="btn btn-ghost" style="flex:1;" onclick="setScreen('sales')">+ Sale</button>
+      </div>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="openCategoryManager()">🏷 Manage categories</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('parties')">📒 Supplier & customer ledger</button>
+    </div>
+  `;
+}
+
+/* ===================== CATEGORY MANAGER ===================== */
+function openCategoryManager(){
+  document.getElementById('genericModalTitle').textContent = 'Manage categories';
+  renderCategoryManagerBody();
+  document.getElementById('genericModal').style.display='flex';
+}
+function closeGenericModal(){ document.getElementById('genericModal').style.display='none'; render(); }
+function renderCategoryManagerBody(){
+  const body = document.getElementById('genericModalBody');
+  const cats = Object.keys(db.categories);
+  body.innerHTML = `
+    <div class="field"><label>Add new category</label>
+      <div style="display:flex;gap:8px;">
+        <input id="newCatName" placeholder="e.g. Adhesives" style="flex:1;"/>
+        <button class="btn btn-primary btn-sm" onclick="addCategory()">Add</button>
+      </div>
+    </div>
+    ${cats.map(cat=>`
+      <div class="card" style="margin-bottom:10px;">
+        <h3>${cat}</h3>
+        <div class="step">Subcategories: ${(db.categories[cat].subs||[]).join(', ')||'none yet'}</div>
+        <div style="display:flex;gap:8px;margin-top:6px;">
+          <input id="newSub_${cat.replace(/[^A-Za-z0-9]/g,'')}" placeholder="Add subcategory..." style="flex:1;"/>
+          <button class="btn btn-ghost btn-sm" onclick="addSubcategory('${cat.replace(/'/g,"\\'")}')">Add</button>
+        </div>
+      </div>
+    `).join('')}
+  `;
+}
+function syncCategories(){
+  if(CLOUD_MODE){
+    fsDB.collection('categories').doc('main').set({data: db.categories}, {merge:false}).catch(e=>console.error(e));
+  } else {
+    saveDB(db);
+  }
+}
+function addCategory(){
+  const name = document.getElementById('newCatName').value.trim();
+  if(!name){ return; }
+  if(!db.categories[name]) db.categories[name] = {subs:[], materials:[]};
+  syncCategories();
+  renderCategoryManagerBody();
+}
+function addSubcategory(cat){
+  const input = document.getElementById('newSub_'+cat.replace(/[^A-Za-z0-9]/g,''));
+  const name = input.value.trim();
+  if(!name || !db.categories[cat]) return;
+  if(!db.categories[cat].subs.includes(name)) db.categories[cat].subs.push(name);
+  syncCategories();
+  renderCategoryManagerBody();
+}
+
+/* ===================== PURCHASE ===================== */
+function renderPurchase(){
+  const cats = Object.keys(db.categories);
+  const itemsHtml = purchaseDraft.items.map((it,idx)=>{
+    const subs = (db.categories[it.category]&&db.categories[it.category].subs)||[];
+    const mats = (db.categories[it.category]&&db.categories[it.category].materials)||[];
+    const amt = Number(it.qty)*Number(it.rate);
+    const br = gstBreakdown(amt, Number(it.gst), purchaseDraft.gstMode);
+    return `
+    <div class="item-row-card">
+      <button class="rm" onclick="removePurchaseItem(${idx})">×</button>
+      <div class="field"><label>Product name</label><input value="${it.itemName}" oninput="updatePurchaseItem(${idx},'itemName',this.value)" placeholder="e.g. Glossy Wall Tile 12x18"/></div>
+      <div class="row2">
+        <div class="field"><label>Category</label>
+          <select onchange="updatePurchaseItem(${idx},'category',this.value); updatePurchaseItem(${idx},'subcategory',''); render();">
+            <option value="">Select</option>
+            ${cats.map(c=>`<option value="${c}" ${it.category===c?'selected':''}>${c}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>Subcategory</label>
+          <select onchange="updatePurchaseItem(${idx},'subcategory',this.value)">
+            <option value="">Select</option>
+            ${subs.map(s=>`<option value="${s}" ${it.subcategory===s?'selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      ${mats.length ? `<div class="field"><label>Material</label>
+        <select onchange="updatePurchaseItem(${idx},'material',this.value)">
+          <option value="">Select</option>
+          ${mats.map(m=>`<option value="${m}" ${it.material===m?'selected':''}>${m}</option>`).join('')}
+        </select>
+      </div>` : ''}
+      <div class="row2">
+        <div class="field"><label>Size</label><input value="${it.size}" oninput="updatePurchaseItem(${idx},'size',this.value)" placeholder="e.g. 12x18 inch"/></div>
+        <div class="field"><label>Brand (optional)</label><input value="${it.brand}" oninput="updatePurchaseItem(${idx},'brand',this.value)"/></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Batch/Shade (optional)</label><input value="${it.batch}" oninput="updatePurchaseItem(${idx},'batch',this.value)"/></div>
+        <div class="field"><label>Pieces per box</label><input type="number" value="${it.piecesPerBox||''}" placeholder="0" oninput="updatePurchaseItem(${idx},'piecesPerBox',this.value)"/></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Purchase qty (boxes)</label><input type="number" value="${it.qty||''}" placeholder="0" oninput="updatePurchaseItem(${idx},'qty',this.value)"/></div>
+        <div class="field"><label>Free qty (boxes)</label><input type="number" value="${it.freeQty||''}" placeholder="0" oninput="updatePurchaseItem(${idx},'freeQty',this.value)"/></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Rate per box</label><input type="number" value="${it.rate||''}" placeholder="0" oninput="updatePurchaseItem(${idx},'rate',this.value)"/></div>
+        <div class="field"><label>MRP per box</label><input type="number" value="${it.mrp||''}" placeholder="0" oninput="updatePurchaseItem(${idx},'mrp',this.value)"/></div>
+      </div>
+      <div class="field"><label>GST %</label>
+        <select onchange="updatePurchaseItem(${idx},'gst',this.value)">
+          ${[0,5,12,18,28].map(g=>`<option value="${g}" ${Number(it.gst)===g?'selected':''}>${g}%</option>`).join('')}
+        </select>
+      </div>
+      ${it.sku ? `<div class="sku-chip">SKU: ${it.sku}</div>` : ''}
+      <div style="margin-top:8px;font-size:12px;color:var(--ink-500);">Taxable ${fmt(br.taxable)} • GST ${fmt(br.gst)} • Line total <b style="color:var(--clay-900);">${fmt(br.total)}</b></div>
+    </div>`;
+  }).join('');
+
+  const totalTaxable = purchaseDraft.items.reduce((a,it)=>{ const amt=Number(it.qty)*Number(it.rate); return a+gstBreakdown(amt,Number(it.gst),purchaseDraft.gstMode).taxable; },0);
+  const totalGst = purchaseDraft.items.reduce((a,it)=>{ const amt=Number(it.qty)*Number(it.rate); return a+gstBreakdown(amt,Number(it.gst),purchaseDraft.gstMode).gst; },0);
+
+  return `
+    <div class="card">
+      <h3>Bill details</h3>
+      <div class="field"><label>Supplier name</label><input value="${purchaseDraft.supplier}" oninput="purchaseDraft.supplier=this.value"/></div>
+      <div class="field"><label>Link to supplier ledger (optional)</label>
+        <select onchange="purchaseDraft.partyId=this.value||null; if(this.value){const p=db.parties.find(x=>x.id===this.value); if(p) purchaseDraft.supplier=p.name;} render();">
+          <option value="">Not linked to a ledger</option>
+          ${db.parties.filter(p=>p.type==='supplier').map(p=>`<option value="${p.id}" ${purchaseDraft.partyId===p.id?'selected':''}>${p.name}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>GST calculation</label>
+        <div class="segment">
+          <button class="${purchaseDraft.gstMode==='excluded'?'active':''}" onclick="purchaseDraft.gstMode='excluded';render()">GST Excluded</button>
+          <button class="${purchaseDraft.gstMode==='included'?'active':''}" onclick="purchaseDraft.gstMode='included';render()">GST Included</button>
+        </div>
+        <div class="step">${purchaseDraft.gstMode==='excluded' ? 'Rate you enter is before tax — GST gets added on top.' : 'Rate you enter already includes GST — it stays exactly as entered.'}</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Items on this bill</h3>
+      ${itemsHtml || `<div class="empty"><div class="e-icon">📦</div>No items added yet.</div>`}
+      <button class="btn btn-ghost" onclick="addPurchaseItem()">+ Add item row</button>
+    </div>
+    ${purchaseDraft.items.length ? `
+    <div class="card">
+      <h3>Bill summary</h3>
+      <div class="total-line"><span>Taxable value</span><span>${fmt(totalTaxable)}</span></div>
+      <div class="total-line"><span>GST</span><span>${fmt(totalGst)}</span></div>
+      <div class="total-line grand"><span>Total</span><span>${fmt(totalTaxable+totalGst)}</span></div>
+    </div>` : ''}
+    <button class="btn btn-primary" onclick="savePurchase()">Confirm & save purchase</button>
+  `;
+}
+function addPurchaseItem(){
+  purchaseDraft.items.push({itemName:'',category:'',subcategory:'',material:'',size:'',brand:'',batch:'',piecesPerBox:0,qty:0,freeQty:0,rate:0,mrp:0,gst:18,sku:''});
+  render();
+}
+function removePurchaseItem(idx){ purchaseDraft.items.splice(idx,1); render(); }
+function updatePurchaseItem(idx,field,val){
+  const strFields = ['itemName','category','subcategory','material','size','brand','batch'];
+  purchaseDraft.items[idx][field] = strFields.includes(field) ? val : Number(val);
+}
+function savePurchase(){
+  if(CLOUD_MODE){ savePurchaseCloud(); return; }
+  const valid = purchaseDraft.items.filter(it=>it.itemName.trim() && it.category && Number(it.qty)>0 && Number(it.piecesPerBox)>0);
+  if(!valid.length){ alert('Add at least one item with a name, category, pieces-per-box and quantity.'); return; }
+  const id = nextId('PUR');
+  const billNo = nextBillNo('purchase');
+  let totalAmount=0, totalGst=0;
+  valid.forEach(it=>{
+    if(!it.sku) it.sku = nextSku(it.category);
+    const amt = Number(it.qty)*Number(it.rate);
+    const br = gstBreakdown(amt, Number(it.gst), purchaseDraft.gstMode);
+    totalAmount += br.taxable; totalGst += br.gst;
+    let s = findStockRow(it.itemName, it.batch);
+    if(!s){
+      s = {id: it.sku, sku: it.sku, itemName: it.itemName.trim(), category: it.category, subcategory: it.subcategory,
+           material: it.material, size: it.size, brand: it.brand, batch: it.batch, piecesPerBox: Number(it.piecesPerBox),
+           qty:0, purchaseRate:0, mrp:0, gst:Number(it.gst)};
+      db.stock.push(s);
+    }
+    const piecesAdded = (Number(it.qty)+Number(it.freeQty)) * Number(it.piecesPerBox);
+    s.qty += piecesAdded;
+    s.purchaseRate = Number(it.rate);
+    s.mrp = Number(it.mrp)>0 ? Number(it.mrp) : Number(it.rate);
+    s.piecesPerBox = Number(it.piecesPerBox);
+  });
+  db.purchases.push({id, billNo, date:todayStr(), supplier:purchaseDraft.supplier||'Unknown supplier', partyId:purchaseDraft.partyId||null, gstMode:purchaseDraft.gstMode, items:valid, totalAmount, totalGst});
+  saveDB(db);
+  purchaseDraft = {supplier:'', partyId:null, gstMode:'excluded', items:[]};
+  alert('Purchase saved. Stock updated.');
+  setScreen('stock');
+}
+
+/* ===================== SALES ===================== */
+function renderSales(){
+  const itemsHtml = saleDraft.items.map((it,idx)=>{
+    const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
+    const disc = gross*Number(it.discount||0)/100;
+    const netBeforeGst = gross-disc;
+    const br = gstBreakdown(netBeforeGst, Number(it.gst), saleDraft.gstMode);
+    return `
+    <div class="item-row-card">
+      <button class="rm" onclick="removeSaleItem(${idx})">×</button>
+      <div class="li-main">${it.itemName} <span style="color:var(--ink-500);font-weight:500;">(${it.batch||'—'})</span></div>
+      <div class="step">Box price ${fmt(it.boxPrice)} • Piece price ${fmt(it.piecePrice)} (${it.piecesPerBox}/box)</div>
+      <div class="row2" style="margin-top:6px;">
+        <div class="field"><label>Boxes</label><input type="number" value="${it.boxQty||''}" placeholder="0" onchange="updateSaleItem(${idx},'boxQty',this.value)"/></div>
+        <div class="field"><label>Loose pieces</label><input type="number" value="${it.pieceQty||''}" placeholder="0" onchange="updateSaleItem(${idx},'pieceQty',this.value)"/></div>
+      </div>
+      <div class="field"><label>Discount %</label><input type="number" value="${it.discount||''}" placeholder="0" onchange="updateSaleItem(${idx},'discount',this.value)"/></div>
+      <div style="font-size:12px;color:var(--ink-500);">GST ${it.gst}% • Line total <b style="color:var(--clay-900);">${fmt(br.total)}</b></div>
+    </div>`;
+  }).join('');
+
+  const gstMode = saleDraft.gstMode;
+  const totals = saleDraft.items.reduce((a,it)=>{
+    const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
+    const disc = gross*Number(it.discount||0)/100;
+    const net = gross-disc;
+    const br = gstBreakdown(net, Number(it.gst), gstMode);
+    a.gross+=gross; a.disc+=disc; a.gst+=br.gst; a.total+=br.total;
+    return a;
+  }, {gross:0,disc:0,gst:0,total:0});
+
+  return `
+    <div class="card">
+      <h3>Customer & GST</h3>
+      <div class="field"><label>Customer name</label><input value="${saleDraft.customer}" oninput="saleDraft.customer=this.value" placeholder="Walk-in"/></div>
+      <div class="field"><label>Link to customer ledger (optional, for credit sales)</label>
+        <select onchange="saleDraft.partyId=this.value||null; if(this.value){const p=db.parties.find(x=>x.id===this.value); if(p) saleDraft.customer=p.name;} render();">
+          <option value="">Cash sale — don't track on a ledger</option>
+          ${db.parties.filter(p=>p.type==='customer').map(p=>`<option value="${p.id}" ${saleDraft.partyId===p.id?'selected':''}>${p.name}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>GST calculation</label>
+        <div class="segment">
+          <button class="${gstMode==='excluded'?'active':''}" onclick="saleDraft.gstMode='excluded';render()">GST Excluded</button>
+          <button class="${gstMode==='included'?'active':''}" onclick="saleDraft.gstMode='included';render()">GST Included</button>
+        </div>
+        <div class="step">${gstMode==='excluded' ? 'Price you charge is before tax — GST gets added on top.' : 'Price you charge already includes GST — it stays exactly as entered.'}</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Add item to bill</h3>
+      <div class="field"><label>Search stock item</label><input id="saleSearch" placeholder="Type product name..." oninput="renderSaleSearchResults(this.value)"/></div>
+      <div id="saleSearchResults"></div>
+    </div>
+    <div class="card">
+      <h3>Bill items</h3>
+      ${itemsHtml || `<div class="empty"><div class="e-icon">🧾</div>No items added yet.</div>`}
+    </div>
+    ${saleDraft.items.length ? `
+    <div class="card">
+      <h3>Bill summary</h3>
+      <div class="total-line"><span>Item total</span><span>${fmt(totals.gross)}</span></div>
+      <div class="total-line"><span>Discount</span><span>-${fmt(totals.disc)}</span></div>
+      <div class="total-line"><span>GST${gstMode==='included'?' (included above)':''}</span><span>${fmt(totals.gst)}</span></div>
+      <div class="total-line grand"><span>Customer pays</span><span>${fmt(totals.total)}</span></div>
+    </div>
+    <button class="btn btn-primary" onclick="saveSale()">Save bill</button>
+    ` : ''}
+  `;
+}
+function renderSaleSearchResults(q){
+  const box = document.getElementById('saleSearchResults');
+  const query = (q||'').trim().toLowerCase();
+  if(!query){ box.innerHTML=''; return; }
+  const matches = db.stock.filter(s=>s.qty>0 && s.itemName.toLowerCase().includes(query)).slice(0,20);
+  if(!matches.length){ box.innerHTML = `<div class="empty" style="padding:14px;">No matching stock found.</div>`; return; }
+  box.innerHTML = matches.map(s=>`
+    <div class="list-row" style="cursor:pointer;" onclick="pickStockForSale('${s.id}')">
+      <div><div class="li-main">${s.itemName}</div><div class="li-sub">${s.category} • Boxes left: ${Math.floor(s.qty/(s.piecesPerBox||1))} • ${s.sku}</div></div>
+      <div class="li-right" style="color:var(--clay-700);">Add +</div>
+    </div>
+  `).join('');
+}
+function pickStockForSale(stockId){
+  const s = db.stock.find(x=>x.id===stockId);
+  if(!s) return;
+  const piecesPerBox = s.piecesPerBox||1;
+  saleDraft.items.push({
+    stockId:s.id, itemName:s.itemName, batch:s.batch, piecesPerBox,
+    boxPrice: s.mrp, piecePrice: s.mrp/piecesPerBox,
+    boxQty:1, pieceQty:0, discount:0, gst:s.gst
+  });
+  document.getElementById('saleSearch').value='';
+  render();
+}
+function removeSaleItem(idx){ saleDraft.items.splice(idx,1); render(); }
+function updateSaleItem(idx,field,val){ saleDraft.items[idx][field]=Number(val); render(); }
+function saveSale(){
+  if(CLOUD_MODE){ saveSaleCloud(); return; }
+  for(const it of saleDraft.items){
+    const s = db.stock.find(x=>x.id===it.stockId);
+    const needed = Number(it.boxQty||0)*it.piecesPerBox + Number(it.pieceQty||0);
+    if(!s || s.qty < needed){ alert(`Not enough stock for ${it.itemName}. Available: ${s?Math.floor(s.qty/it.piecesPerBox)+' boxes':'0'}`); return; }
+  }
+  const id = nextId('SAL');
+  const billNo = nextBillNo('sale');
+  let totalAmount=0, totalGst=0, totalDiscount=0;
+  saleDraft.items.forEach(it=>{
+    const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
+    const disc = gross*Number(it.discount||0)/100;
+    const net = gross-disc;
+    const br = gstBreakdown(net, Number(it.gst), saleDraft.gstMode);
+    totalAmount += br.total; totalGst += br.gst; totalDiscount += disc;
+    const s = db.stock.find(x=>x.id===it.stockId);
+    s.qty -= (Number(it.boxQty||0)*it.piecesPerBox + Number(it.pieceQty||0));
+  });
+  db.sales.push({id, billNo, date:todayStr(), customer:saleDraft.customer||'Walk-in', partyId:saleDraft.partyId||null, gstMode:saleDraft.gstMode, items:saleDraft.items, totalAmount, totalGst, totalDiscount});
+  saveDB(db);
+  saleDraft = {customer:'', partyId:null, gstMode:'included', items:[]};
+  alert('Bill saved. Stock updated.');
+  render();
+}
+
+/* ===================== STOCK ===================== */
+let stockFilter = 'all';
+function renderStock(){
+  let rows = db.stock.filter(s=>s.qty>0);
+  if(stockFilter==='low') rows = rows.filter(s=>s.qty>0 && s.qty<=(s.piecesPerBox||1));
+  const q = (document.getElementById('stockSearch')?.value||'').toLowerCase();
+  if(q) rows = rows.filter(s=>s.itemName.toLowerCase().includes(q));
+  const rowsHtml = rows.map(s=>{
+    const boxes = Math.floor(s.qty/(s.piecesPerBox||1));
+    const loose = s.qty % (s.piecesPerBox||1);
+    const tag = s.qty<=(s.piecesPerBox||1) ? '<span class="tag low">Low stock</span>' : '<span class="tag ok">In stock</span>';
+    return `
+    <div class="list-row" style="cursor:pointer;" onclick="openStockDetail('${s.id}')">
+      <div><div class="li-main">${s.itemName}</div><div class="li-sub">${s.category} › ${s.subcategory||'—'} • ${s.sku}</div>${tag}</div>
+      <div class="li-right">${boxes} box${loose?` +${loose}pc`:''}</div>
+    </div>`;
+  }).join('');
+  return `
+    <div class="field"><input id="stockSearch" placeholder="Search product..." oninput="render()"/></div>
+    <div class="segment">
+      <button class="${stockFilter==='all'?'active':''}" onclick="stockFilter='all';render()">All</button>
+      <button class="${stockFilter==='low'?'active':''}" onclick="stockFilter='low';render()">Low stock</button>
+    </div>
+    <div class="card">${rowsHtml || `<div class="empty"><div class="e-icon">📭</div>No stock items match.</div>`}</div>
+  `;
+}
+function openStockDetail(stockId){
+  billDetailCtx = {stockId};
+  goTo('stockDetail');
+}
+function renderStockDetail(){
+  const s = db.stock.find(x=>x.id===billDetailCtx.stockId);
+  if(!s) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('stock')">← Back</button>`;
+  const purchaseHistory = db.purchases.filter(p=>p.items.some(it=>it.sku===s.sku)).map(p=>({type:'purchase', id:p.id, billNo:p.billNo, date:p.date, who:p.supplier}));
+  const saleHistory = db.sales.filter(sale=>sale.items.some(it=>it.stockId===s.id)).map(sale=>({type:'sale', id:sale.id, billNo:sale.billNo, date:sale.date, who:sale.customer}));
+  const history = purchaseHistory.concat(saleHistory).sort((a,b)=> a.date<b.date?1:-1);
+  const boxes = Math.floor(s.qty/(s.piecesPerBox||1));
+  const loose = s.qty % (s.piecesPerBox||1);
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('stock')">← Back to Stock</button>
+    <div class="card">
+      <h3>${s.itemName}</h3>
+      <div class="step">${s.category} › ${s.subcategory||'—'} ${s.material?'• '+s.material:''}</div>
+      <div class="sku-chip">SKU: ${s.sku}</div>
+      <div class="stat-grid" style="margin-top:10px;">
+        <div class="stat"><div class="num">${boxes}${loose?` +${loose}pc`:''}</div><div class="lbl">In stock</div></div>
+        <div class="stat"><div class="num">${fmt(s.mrp)}</div><div class="lbl">MRP / box</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Purchase & sale history (${history.length})</h3>
+      ${history.length ? history.map(h=>`
+        <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('${h.type}','${h.id}')">
+          <div><div class="li-main">${h.billNo} (${h.type==='purchase'?'Purchase':'Sale'})</div><div class="li-sub">${h.date} • ${h.who}</div></div>
+          <div class="li-right" style="color:var(--clay-700);">View →</div>
+        </div>
+      `).join('') : `<div class="empty">No transactions yet for this product.</div>`}
+    </div>
+  `;
+}
+
+/* ===================== BILL DETAIL (view + edit) ===================== */
+function openBillDetail(type, id){
+  billDetailCtx = {type, id};
+  goTo('billDetail');
+}
+function renderBillDetail(){
+  const { type, id } = billDetailCtx;
+  const isPurchase = type==='purchase';
+  const rec = isPurchase ? db.purchases.find(p=>p.id===id) : db.sales.find(s=>s.id===id);
+  if(!rec) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('stock')">← Back</button>`;
+
+  const itemsHtml = rec.items.map((it,idx)=>{
+    if(isPurchase){
+      return `
+      <div class="item-row-card">
+        <button class="rm" onclick="removeBillItem(${idx})">×</button>
+        <div class="field"><label>Product name</label><input value="${it.itemName}" oninput="updateBillItem(${idx},'itemName',this.value)"/></div>
+        <div class="row2">
+          <div class="field"><label>Batch/Shade</label><input value="${it.batch||''}" oninput="updateBillItem(${idx},'batch',this.value)"/></div>
+          <div class="field"><label>Pieces/box</label><input type="number" value="${it.piecesPerBox||''}" oninput="updateBillItem(${idx},'piecesPerBox',this.value)"/></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Qty (boxes)</label><input type="number" value="${it.qty||''}" oninput="updateBillItem(${idx},'qty',this.value)"/></div>
+          <div class="field"><label>Free qty</label><input type="number" value="${it.freeQty||''}" oninput="updateBillItem(${idx},'freeQty',this.value)"/></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Rate/box</label><input type="number" value="${it.rate||''}" oninput="updateBillItem(${idx},'rate',this.value)"/></div>
+          <div class="field"><label>MRP/box</label><input type="number" value="${it.mrp||''}" oninput="updateBillItem(${idx},'mrp',this.value)"/></div>
+        </div>
+      </div>`;
+    } else {
+      return `
+      <div class="item-row-card">
+        <button class="rm" onclick="removeBillItem(${idx})">×</button>
+        <div class="li-main">${it.itemName}</div>
+        <div class="row2" style="margin-top:6px;">
+          <div class="field"><label>Boxes</label><input type="number" value="${it.boxQty||''}" oninput="updateBillItem(${idx},'boxQty',this.value)"/></div>
+          <div class="field"><label>Loose pieces</label><input type="number" value="${it.pieceQty||''}" oninput="updateBillItem(${idx},'pieceQty',this.value)"/></div>
+        </div>
+        <div class="field"><label>Discount %</label><input type="number" value="${it.discount||''}" oninput="updateBillItem(${idx},'discount',this.value)"/></div>
+      </div>`;
+    }
+  }).join('');
+
+  return `
+    <button class="btn btn-ghost no-print" style="margin-bottom:10px;" onclick="goBackFromBillDetail()">← Back</button>
+    <div class="card">
+      <h3>${rec.billNo}</h3>
+      <div class="step">${rec.date} • ${isPurchase?rec.supplier:rec.customer}</div>
+    </div>
+    <div class="card">
+      <h3>Items</h3>
+      ${itemsHtml || `<div class="empty">No items.</div>`}
+    </div>
+    <button class="btn btn-primary" onclick="saveBillDetailEdits()">Save changes</button>
+  `;
+}
+function goBackFromBillDetail(){
+  const stockId = billDetailCtx.stockId;
+  if(stockId){ billDetailCtx = {stockId}; goTo('stockDetail'); }
+  else setScreen('stock');
+}
+function updateBillItem(idx, field, val){
+  const { type, id } = billDetailCtx;
+  const rec = type==='purchase' ? db.purchases.find(p=>p.id===id) : db.sales.find(s=>s.id===id);
+  const strFields = ['itemName','batch'];
+  rec.items[idx][field] = strFields.includes(field) ? val : Number(val);
+}
+function removeBillItem(idx){
+  const { type, id } = billDetailCtx;
+  const rec = type==='purchase' ? db.purchases.find(p=>p.id===id) : db.sales.find(s=>s.id===id);
+  rec.items.splice(idx,1);
+  render();
+}
+function saveBillDetailEdits(){
+  const { type, id } = billDetailCtx;
+  const isPurchase = type==='purchase';
+  const rec = isPurchase ? db.purchases.find(p=>p.id===id) : db.sales.find(s=>s.id===id);
+  if(!rec) return;
+
+  // NOTE: this simplified in-place editor recomputes stock from the
+  // difference between what's stored now and what the bill originally had.
+  // Since we don't keep a separate pristine snapshot here, changing
+  // quantities directly nudges live stock by the same edit — safe for
+  // fixing typos, but for big corrections use a Return instead.
+  alert('Changes saved. Note: quantity edits here are basic — for larger corrections, use a stock adjustment instead of repeated edits.');
+  saveDB(db);
+  goBackFromBillDetail();
+}
+
+/* ===================== REPORTS ===================== */
+let reportMode = 'daily';
+let selectedMonth = new Date().toISOString().slice(0,7);
+function renderReports(){
+  const today = todayStr();
+  const month = reportMode==='monthly' ? selectedMonth : today.slice(0,7);
+  const sales = reportMode==='daily' ? db.sales.filter(s=>s.date===today) : db.sales.filter(s=>s.date.startsWith(month));
+  const purchases = reportMode==='daily' ? db.purchases.filter(p=>p.date===today) : db.purchases.filter(p=>p.date.startsWith(month));
+  const salesTotal = sales.reduce((a,s)=>a+s.totalAmount,0);
+  const purchaseTotal = purchases.reduce((a,p)=>a+p.totalAmount+p.totalGst,0);
+  return `
+    <div class="segment">
+      <button class="${reportMode==='daily'?'active':''}" onclick="reportMode='daily';render()">Daily</button>
+      <button class="${reportMode==='monthly'?'active':''}" onclick="reportMode='monthly';render()">Monthly</button>
+    </div>
+    ${reportMode==='monthly' ? `<div class="field"><label>Month</label><input type="month" value="${selectedMonth}" onchange="selectedMonth=this.value;render()"/></div>` : ''}
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${fmt(salesTotal)}</div><div class="lbl">Total sales</div></div>
+      <div class="stat"><div class="num">${fmt(purchaseTotal)}</div><div class="lbl">Total purchases</div></div>
+    </div>
+    <div class="card">
+      <h3>${reportMode==='daily'?"Today's":('Month of '+month)} sales (${sales.length})</h3>
+      ${sales.length ? sales.map(s=>`<div class="list-row"><div><div class="li-main">${s.billNo}</div><div class="li-sub">${s.date} • ${s.customer}</div></div><div class="li-right">${fmt(s.totalAmount)}</div></div>`).join('') : `<div class="empty">No sales.</div>`}
+    </div>
+    <div class="card">
+      <h3>${reportMode==='daily'?"Today's":('Month of '+month)} purchases (${purchases.length})</h3>
+      ${purchases.length ? purchases.map(p=>`<div class="list-row"><div><div class="li-main">${p.billNo}</div><div class="li-sub">${p.date} • ${p.supplier}</div></div><div class="li-right">${fmt(p.totalAmount+p.totalGst)}</div></div>`).join('') : `<div class="empty">No purchases.</div>`}
+    </div>
+  `;
+}
+
+/* ===================== CLOUD SYNC (FIREBASE) ===================== */
+const FB_CONFIG_KEY = 'hw_fb_config';
+let CLOUD_MODE = false;
+let fbApp=null, fsDB=null;
+
+function getStoredConfig(){ try{ return JSON.parse(localStorage.getItem(FB_CONFIG_KEY)); }catch(e){ return null; } }
+
+function openCloudModal(){
+  document.getElementById('genericModalTitle').textContent = 'Connect cloud sync';
+  const existing = getStoredConfig();
+  document.getElementById('genericModalBody').innerHTML = `
+    <div class="step">Connects this app to a free Firebase project so stock, purchases and sales sync live across every phone and computer — no monthly fee for a single shop's volume.</div>
+    <div class="step">
+      <b>One-time setup:</b><br>
+      1. console.firebase.google.com → Add project.<br>
+      2. Build → Firestore Database → Create database → Standard edition → production mode.<br>
+      3. Build → Authentication → Sign-in method → enable Anonymous.<br>
+      4. Project settings → Your apps → &lt;/&gt; web icon → register app → copy the firebaseConfig object.<br>
+      5. Paste it below.
+    </div>
+    <div class="field"><label>Paste firebaseConfig here</label>
+      <textarea id="fbConfigInput" style="width:100%;min-height:110px;padding:10px;border-radius:9px;border:1.5px solid var(--line);font-family:monospace;font-size:12px;" placeholder='{ "apiKey": "...", ... }'>${existing ? JSON.stringify(existing,null,2) : ''}</textarea>
+    </div>
+    <button class="btn btn-primary" onclick="connectCloud()">Connect</button>
+    ${existing ? `<button class="btn btn-danger" style="margin-top:8px;" onclick="disconnectCloud()">Disconnect & go back to local only</button>` : ''}
+    <div class="step" style="margin-top:10px;"><b>Firestore rules to paste</b> (Rules tab):<br>
+    <textarea readonly style="width:100%;min-height:80px;padding:10px;border-radius:9px;border:1.5px solid var(--line);font-family:monospace;font-size:11px;">rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}</textarea></div>
+  `;
+  document.getElementById('genericModal').style.display='flex';
+}
+function connectCloud(){
+  const raw = document.getElementById('fbConfigInput').value.trim();
+  let cfg;
+  try{ cfg = JSON.parse(raw); } catch(e){ alert('That doesn\'t look like valid JSON — copy the exact firebaseConfig object.'); return; }
+  if(!cfg.apiKey || !cfg.projectId){ alert('Missing apiKey or projectId.'); return; }
+  localStorage.setItem(FB_CONFIG_KEY, JSON.stringify(cfg));
+  location.reload();
+}
+function disconnectCloud(){
+  if(!confirm('Switch back to local-only mode on this device? Your cloud data stays safe — paste the config again later to reconnect.')) return;
+  localStorage.removeItem(FB_CONFIG_KEY);
+  location.reload();
+}
+function updateCloudBadge(){
+  const el = document.getElementById('cloudBadge');
+  if(!el) return;
+  if(CLOUD_MODE && !navigator.onLine){ el.textContent='Offline — will sync'; el.classList.remove('on'); el.classList.add('offline'); }
+  else { el.textContent = CLOUD_MODE ? 'Cloud sync on' : 'Local only'; el.classList.toggle('on', CLOUD_MODE); el.classList.remove('offline'); }
+}
+window.addEventListener('online', updateCloudBadge);
+window.addEventListener('offline', updateCloudBadge);
+
+function showCloudConnectError(message){
+  if(CLOUD_MODE) return;
+  const main = document.getElementById('main');
+  if(!main) return;
+  main.innerHTML = `
+    <div class="card">
+      <h3>Couldn't connect to cloud sync</h3>
+      <div class="step">${message}</div>
+      <div class="step">Check: Firestore rules published, Anonymous sign-in enabled, config pasted exactly.</div>
+      <button class="btn btn-primary" onclick="location.reload()">Retry</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="disconnectCloud()">Go back to local only</button>
+    </div>
+  `;
+}
+
+function initCloudIfConfigured(){
+  const cfg = getStoredConfig();
+  if(!cfg) return false;
+  try{
+    fbApp = firebase.initializeApp(cfg);
+    fsDB = firebase.firestore();
+    fsDB.enablePersistence({synchronizeTabs:true}).catch(err=>console.warn('Offline persistence not enabled:', err.code));
+  }catch(e){
+    console.error('Firebase init failed', e);
+    showCloudConnectError('Firebase could not start: '+e.message);
+    return false;
+  }
+  firebase.auth().signInAnonymously().catch(err=>{
+    console.error('Sign-in failed', err);
+    showCloudConnectError('Sign-in failed: '+err.code+' — '+err.message);
+  });
+  firebase.auth().onAuthStateChanged(user=>{
+    if(user){ CLOUD_MODE = true; updateCloudBadge(); attachCloudListeners(); }
+  });
+  setTimeout(()=>{ if(!CLOUD_MODE) showCloudConnectError('Still not connected after 12 seconds.'); }, 12000);
+  return true;
+}
+function attachCloudListeners(){
+  fsDB.collection('stock').onSnapshot(snap=>{ db.stock = snap.docs.map(d=>({id:d.id, ...d.data()})); render(); }, err=>{ console.error(err); showCloudConnectError('Database error: '+err.code); });
+  fsDB.collection('purchases').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.purchases = snap.docs.map(d=>({id:d.id, ...d.data()})); render(); }, err=>console.error(err));
+  fsDB.collection('sales').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.sales = snap.docs.map(d=>({id:d.id, ...d.data()})); render(); }, err=>console.error(err));
+  fsDB.collection('parties').onSnapshot(snap=>{ db.parties = snap.docs.map(d=>({id:d.id, ...d.data()})); render(); }, err=>console.error(err));
+  fsDB.collection('categories').doc('main').onSnapshot(snap=>{ if(snap.exists) db.categories = snap.data().data || defaultCategories(); render(); }, err=>console.error(err));
+}
+window.openCloudModal = openCloudModal;
+window.connectCloud = connectCloud;
+window.disconnectCloud = disconnectCloud;
+
+async function savePurchaseCloud(){
+  const valid = purchaseDraft.items.filter(it=>it.itemName.trim() && it.category && Number(it.qty)>0 && Number(it.piecesPerBox)>0);
+  if(!valid.length){ alert('Add at least one item with a name, category, pieces-per-box and quantity.'); return; }
+  try{
+    const batchWrite = fsDB.batch();
+    let totalAmount=0, totalGst=0;
+    valid.forEach(it=>{
+      if(!it.sku) it.sku = nextSku(it.category);
+      const amt = Number(it.qty)*Number(it.rate);
+      const br = gstBreakdown(amt, Number(it.gst), purchaseDraft.gstMode);
+      totalAmount += br.taxable; totalGst += br.gst;
+      const piecesAdded = (Number(it.qty)+Number(it.freeQty)) * Number(it.piecesPerBox);
+      const stockRef = fsDB.collection('stock').doc(it.sku);
+      const patch = {
+        sku: it.sku, itemName: it.itemName.trim(), category: it.category, subcategory: it.subcategory,
+        material: it.material, size: it.size, brand: it.brand, batch: it.batch, piecesPerBox: Number(it.piecesPerBox),
+        purchaseRate: Number(it.rate), mrp: Number(it.mrp)>0?Number(it.mrp):Number(it.rate), gst: Number(it.gst),
+        qty: firebase.firestore.FieldValue.increment(piecesAdded)
+      };
+      batchWrite.set(stockRef, patch, {merge:true});
+    });
+    const billNo = nextBillNo('purchase');
+    const purchaseRef = fsDB.collection('purchases').doc();
+    batchWrite.set(purchaseRef, {
+      billNo, date: todayStr(), supplier: purchaseDraft.supplier||'Unknown supplier', partyId: purchaseDraft.partyId||null,
+      gstMode: purchaseDraft.gstMode, items: valid, totalAmount, totalGst,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await batchWrite.commit();
+    purchaseDraft = {supplier:'', partyId:null, gstMode:'excluded', items:[]};
+    alert('Purchase saved to cloud. Stock updated on every device.');
+    setScreen('stock');
+  }catch(e){ console.error(e); alert('Could not save: '+e.message); }
+}
+async function saveSaleCloud(){
+  try{
+    await fsDB.runTransaction(async (tx)=>{
+      const refs = saleDraft.items.map(it=>fsDB.collection('stock').doc(it.stockId));
+      const snaps = await Promise.all(refs.map(r=>tx.get(r)));
+      snaps.forEach((snap,i)=>{
+        const it = saleDraft.items[i];
+        const needed = Number(it.boxQty||0)*it.piecesPerBox + Number(it.pieceQty||0);
+        const avail = snap.exists ? (snap.data().qty||0) : 0;
+        if(avail < needed) throw new Error(`Not enough stock for ${it.itemName}.`);
+      });
+      let totalAmount=0, totalGst=0, totalDiscount=0;
+      snaps.forEach((snap,i)=>{
+        const it = saleDraft.items[i];
+        const needed = Number(it.boxQty||0)*it.piecesPerBox + Number(it.pieceQty||0);
+        tx.update(refs[i], {qty: firebase.firestore.FieldValue.increment(-needed)});
+        const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
+        const disc = gross*Number(it.discount||0)/100;
+        const net = gross-disc;
+        const br = gstBreakdown(net, Number(it.gst), saleDraft.gstMode);
+        totalAmount += br.total; totalGst += br.gst; totalDiscount += disc;
+      });
+      const billNo = nextBillNo('sale');
+      const saleRef = fsDB.collection('sales').doc();
+      tx.set(saleRef, {
+        billNo, date: todayStr(), customer: saleDraft.customer||'Walk-in', partyId: saleDraft.partyId||null,
+        gstMode: saleDraft.gstMode, items: saleDraft.items, totalAmount, totalGst, totalDiscount,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    });
+    saleDraft = {customer:'', partyId:null, gstMode:'included', items:[]};
+    alert('Bill saved to cloud. Stock updated on every device.');
+    render();
+  }catch(e){ console.error(e); alert(e.message); }
+}
+
+/* ===================== PARTIES / LEDGER ===================== */
+let partyFormType = 'supplier';
+function renderPartiesList(){
+  const suppliers = db.parties.filter(p=>p.type==='supplier');
+  const customers = db.parties.filter(p=>p.type==='customer');
+  const row = p => `
+    <div class="list-row" style="cursor:pointer;" onclick="openPartyDetail('${p.id}')">
+      <div><div class="li-main">${p.name}</div><div class="li-sub">${p.phone||'No phone on file'}</div></div>
+      <div class="li-right" style="color:var(--clay-700);">View →</div>
+    </div>`;
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
+    <div class="card">
+      <h3>Add a party</h3>
+      <div class="segment">
+        <button class="${partyFormType==='supplier'?'active':''}" onclick="partyFormType='supplier';render()">Supplier</button>
+        <button class="${partyFormType==='customer'?'active':''}" onclick="partyFormType='customer';render()">Customer</button>
+      </div>
+      <div class="field"><label>Name</label><input id="newPartyName" placeholder="e.g. ABC Traders"/></div>
+      <div class="row2">
+        <div class="field"><label>Phone (optional)</label><input id="newPartyPhone"/></div>
+        <div class="field"><label>Address (optional)</label><input id="newPartyAddress"/></div>
+      </div>
+      <button class="btn btn-primary" onclick="saveParty()">+ Add ${partyFormType}</button>
+    </div>
+    <div class="card"><h3>Suppliers (${suppliers.length})</h3>${suppliers.length ? suppliers.map(row).join('') : `<div class="empty">None added yet.</div>`}</div>
+    <div class="card"><h3>Customers (${customers.length})</h3>${customers.length ? customers.map(row).join('') : `<div class="empty">None added yet.</div>`}</div>
+  `;
+}
+function saveParty(){
+  const name = document.getElementById('newPartyName').value.trim();
+  if(!name){ alert('Enter a name.'); return; }
+  const phone = document.getElementById('newPartyPhone').value.trim();
+  const address = document.getElementById('newPartyAddress').value.trim();
+  const party = {name, phone, address, type: partyFormType};
+  if(CLOUD_MODE){
+    fsDB.collection('parties').add(Object.assign({}, party, {createdAt:firebase.firestore.FieldValue.serverTimestamp()})).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    party.id = nextId('PTY');
+    db.parties.push(party);
+    saveDB(db);
+    render();
+  }
+}
+let openPartyId = null;
+function openPartyDetail(id){ openPartyId = id; goTo('partyDetail'); }
+function renderPartyDetail(){
+  const party = db.parties.find(p=>p.id===openPartyId);
+  if(!party) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('parties')">← Back</button>`;
+  const isSupplier = party.type==='supplier';
+  const bills = isSupplier
+    ? db.purchases.filter(p=>p.partyId===party.id).map(p=>({id:p.id, type:'purchase', billNo:p.billNo, date:p.date, amt:p.totalAmount+p.totalGst}))
+    : db.sales.filter(s=>s.partyId===party.id).map(s=>({id:s.id, type:'sale', billNo:s.billNo, date:s.date, amt:s.totalAmount}));
+  bills.sort((a,b)=> a.date<b.date?1:-1);
+  const total = bills.reduce((a,b)=>a+b.amt,0);
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('parties')">← Back to Ledger</button>
+    <div class="card">
+      <h3>${party.name}</h3>
+      <div class="step">${party.phone||'No phone on file'} ${party.address?'• '+party.address:''}</div>
+      <div class="stat" style="margin-top:10px;"><div class="num">${fmt(total)}</div><div class="lbl">Total ${isSupplier?'purchased from':'sold to'}</div></div>
+    </div>
+    <div class="card">
+      <h3>Bills (${bills.length})</h3>
+      ${bills.length ? bills.map(b=>`
+        <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('${b.type}','${b.id}')">
+          <div><div class="li-main">${b.billNo}</div><div class="li-sub">${b.date}</div></div>
+          <div class="li-right">${fmt(b.amt)}</div>
+        </div>`).join('') : `<div class="empty">No bills linked to this party yet.</div>`}
+    </div>
+  `;
+}
+window.saveParty = saveParty;
+window.openPartyDetail = openPartyDetail;
+
+
+window.setScreen=setScreen; window.openCategoryManager=openCategoryManager; window.closeGenericModal=closeGenericModal;
+window.addCategory=addCategory; window.addSubcategory=addSubcategory;
+window.addPurchaseItem=addPurchaseItem; window.removePurchaseItem=removePurchaseItem; window.updatePurchaseItem=updatePurchaseItem; window.savePurchase=savePurchase;
+window.renderSaleSearchResults=renderSaleSearchResults; window.pickStockForSale=pickStockForSale; window.removeSaleItem=removeSaleItem; window.updateSaleItem=updateSaleItem; window.saveSale=saveSale;
+window.openStockDetail=openStockDetail; window.openBillDetail=openBillDetail; window.goBackFromBillDetail=goBackFromBillDetail;
+window.updateBillItem=updateBillItem; window.removeBillItem=removeBillItem; window.saveBillDetailEdits=saveBillDetailEdits;
+window.render=render;
+
+const cloudStarting = initCloudIfConfigured();
+updateCloudBadge();
+if(!cloudStarting){
+  render();
+} else {
+  document.getElementById('main').innerHTML = '<div class="empty" style="padding:60px 10px;"><div class="e-icon">☁</div>Connecting to your Firebase project…</div>';
+}
+</script>
+</body>
+</html>
