@@ -823,7 +823,6 @@ window.addEventListener('online', updateCloudBadge);
 window.addEventListener('offline', updateCloudBadge);
 
 function showCloudConnectError(message){
-  if(CLOUD_MODE) return;
   const main = document.getElementById('main');
   if(!main) return;
   main.innerHTML = `
@@ -859,12 +858,16 @@ function initCloudIfConfigured(){
   setTimeout(()=>{ if(!CLOUD_MODE) showCloudConnectError('Still not connected after 12 seconds.'); }, 12000);
   return true;
 }
+function safeRender(){
+  try{ render(); }
+  catch(e){ console.error('Render error:', e); showCloudConnectError('A display error happened: '+e.message); }
+}
 function attachCloudListeners(){
-  fsDB.collection('stock').onSnapshot(snap=>{ db.stock = snap.docs.map(d=>({id:d.id, ...d.data()})); render(); }, err=>{ console.error(err); showCloudConnectError('Database error: '+err.code); });
-  fsDB.collection('purchases').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.purchases = snap.docs.map(d=>({id:d.id, ...d.data()})); render(); }, err=>console.error(err));
-  fsDB.collection('sales').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.sales = snap.docs.map(d=>({id:d.id, ...d.data()})); render(); }, err=>console.error(err));
-  fsDB.collection('parties').onSnapshot(snap=>{ db.parties = snap.docs.map(d=>({id:d.id, ...d.data()})); render(); }, err=>console.error(err));
-  fsDB.collection('categories').doc('main').onSnapshot(snap=>{ if(snap.exists) db.categories = snap.data().data || defaultCategories(); render(); }, err=>console.error(err));
+  fsDB.collection('stock').onSnapshot(snap=>{ db.stock = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (stock): '+err.code+' — '+err.message); });
+  fsDB.collection('purchases').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.purchases = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (purchases): '+err.code+' — '+err.message); });
+  fsDB.collection('sales').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.sales = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (sales): '+err.code+' — '+err.message); });
+  fsDB.collection('parties').onSnapshot(snap=>{ db.parties = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (parties): '+err.code+' — '+err.message); });
+  fsDB.collection('categories').doc('main').onSnapshot(snap=>{ if(snap.exists) db.categories = snap.data().data || defaultCategories(); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (categories): '+err.code+' — '+err.message); });
 }
 window.openCloudModal = openCloudModal;
 window.connectCloud = connectCloud;
