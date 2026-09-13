@@ -139,6 +139,13 @@
     .modal-overlay{ align-items:center; }
     .modal-box{ max-width:600px; border-radius:18px; }
   }
+
+  @media print{
+    body *{visibility:hidden;}
+    #printArea, #printArea *{visibility:visible;}
+    #printArea{position:absolute;top:0;left:0;width:100%;padding:0;}
+    header.top, nav.bottom, .no-print{display:none !important;}
+  }
 </style>
 </head>
 <body>
@@ -199,8 +206,9 @@ function loadDB(){
     if(!d.staff) d.staff=[];
     if(!d.staffLedger) d.staffLedger=[];
     if(!d.openingStock) d.openingStock=[];
+    if(!d.shopInfo) d.shopInfo={name:'Hammad World', gstin:'', address:'', phone:''};
     return d; }catch(e){} }
-  return { stock:[], purchases:[], sales:[], parties:[], payments:[], purchaseReturns:[], saleReturns:[], expenses:[], staff:[], staffLedger:[], openingStock:[], categories: defaultCategories(), seqs:{} };
+  return { stock:[], purchases:[], sales:[], parties:[], payments:[], purchaseReturns:[], saleReturns:[], expenses:[], staff:[], staffLedger:[], openingStock:[], categories: defaultCategories(), shopInfo:{name:'Hammad World', gstin:'', address:'', phone:''}, seqs:{} };
 }
 function saveDB(db){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
 let db = loadDB();
@@ -247,7 +255,7 @@ function gstBreakdown(amount, gstPct, mode){
 /* ===================== APP STATE / ROUTER ===================== */
 let currentScreen = 'dashboard';
 let purchaseDraft = { supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:'' };
-let saleDraft = { customer:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'included', items:[], additionalCharges:[] };
+let saleDraft = { customer:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'included', items:[], additionalCharges:[], billDiscount:0 };
 const ADDITIONAL_CHARGE_CATEGORIES = ['Transport','Loading','Unloading','Labour Charges','Others'];
 function renderAdditionalChargesSection(draft){
   const rows = (draft.additionalCharges||[]).map((c,idx)=>`
@@ -308,7 +316,9 @@ const titles = {
   expenses:['Expenses','Daily expense tracker'],
   staffList:['Staff Ledger','Salary, advances & pending balance'],
   staffDetail:['Staff ledger','Salary payments & advances'],
-  pnl:['Profit & Loss','True cost, GST kept separate']
+  pnl:['Profit & Loss','True cost, GST kept separate'],
+  shopSettings:['Shop details','Used on every printed bill'],
+  printPreview:['Document','Preview & print']
 };
 
 function setScreen(name){
@@ -339,6 +349,8 @@ function render(){
   if(currentScreen==='staffList'){ main.innerHTML = renderStaffList(); return; }
   if(currentScreen==='staffDetail'){ main.innerHTML = renderStaffDetail(); return; }
   if(currentScreen==='pnl'){ main.innerHTML = renderPnL(); return; }
+  if(currentScreen==='shopSettings'){ main.innerHTML = renderShopSettings(); return; }
+  if(currentScreen==='printPreview'){ main.innerHTML = renderPrintPreview(); return; }
   if(currentScreen==='dashboard') main.innerHTML = renderDashboard();
   else if(currentScreen==='purchase') main.innerHTML = renderPurchase();
   else if(currentScreen==='sales') main.innerHTML = renderSales();
@@ -354,7 +366,7 @@ function renderDashboard(){
   const salesTotal = todaySales.reduce((a,s)=>a+s.totalAmount,0);
   const purchaseTotal = todayPurchases.reduce((a,p)=>a+p.totalAmount+p.totalGst+(p.additionalChargesTotal||0),0);
   const stockValue = stockValueTotal();
-  const lowStock = db.stock.filter(s=>s.qty>0 && s.qty<=(s.piecesPerBox||1));
+  const lowStock = db.stock.filter(s=>s.qty>0 && s.qty<=lowStockThresholdFor(s));
   const billsToday = todaySales.length + todayPurchases.length;
 
   let alerts = '';
@@ -392,6 +404,7 @@ function renderDashboard(){
       <h3>More</h3>
       <button class="btn btn-ghost" onclick="setScreen('expenses')">💵 Expense Management</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('pnl')">📊 Profit &amp; Loss</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('shopSettings')">🏪 Shop details (for invoices)</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('staffList')">👷 Staff Ledger</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="openCategoryManager()">🏷 Manage Category & Sub-category</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="exportBackup()">⬇ Export Backup</button>
@@ -422,8 +435,18 @@ function renderCategoryManagerBody(){
     </div>
     ${cats.map(cat=>`
       <div class="card" style="margin-bottom:10px;">
-        <h3>${cat}</h3>
-        <div class="step">Subcategories: ${(db.categories[cat].subs||[]).join(', ')||'none yet'}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <h3 style="margin:0;">${cat}</h3>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-ghost btn-sm" onclick="renameCategory('${cat.replace(/'/g,"\\'")}')">Rename</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteCategory('${cat.replace(/'/g,"\\'")}')">Delete</button>
+          </div>
+        </div>
+        <div style="margin-top:8px;">
+          ${(db.categories[cat].subs||[]).length ? (db.categories[cat].subs||[]).map(sub=>`
+            <span class="chip" style="margin:0 6px 6px 0;display:inline-flex;align-items:center;gap:6px;">${sub} <span style="cursor:pointer;color:var(--red-700);font-weight:800;" onclick="deleteSubcategory('${cat.replace(/'/g,"\\'")}','${sub.replace(/'/g,"\\'")}')">×</span></span>
+          `).join('') : `<div class="step">No subcategories yet.</div>`}
+        </div>
         <div style="display:flex;gap:8px;margin-top:6px;">
           <input id="newSub_${cat.replace(/[^A-Za-z0-9]/g,'')}" placeholder="Add subcategory..." style="flex:1;"/>
           <button class="btn btn-ghost btn-sm" onclick="addSubcategory('${cat.replace(/'/g,"\\'")}')">Add</button>
@@ -432,6 +455,46 @@ function renderCategoryManagerBody(){
     `).join('')}
   `;
 }
+async function renameCategory(oldName){
+  const newName = prompt('Rename category:', oldName);
+  if(!newName || !newName.trim() || newName.trim()===oldName) return;
+  const trimmed = newName.trim();
+  if(db.categories[trimmed]){ alert('A category with that name already exists.'); return; }
+  db.categories[trimmed] = db.categories[oldName];
+  delete db.categories[oldName];
+  const affected = db.stock.filter(s=>s.category===oldName);
+  affected.forEach(s=>{ s.category = trimmed; });
+  if(CLOUD_MODE){
+    try{
+      const batchWrite = fsDB.batch();
+      affected.forEach(s=>{ batchWrite.update(fsDB.collection('stock').doc(s.id), {category: trimmed}); });
+      batchWrite.set(fsDB.collection('categories').doc('main'), {data: db.categories});
+      await batchWrite.commit();
+    }catch(e){ alert('Could not save: '+e.message); return; }
+  } else {
+    saveDB(db);
+  }
+  renderCategoryManagerBody();
+}
+function deleteCategory(cat){
+  const inUse = db.stock.some(s=>s.category===cat);
+  if(inUse){ alert("Can't delete — some products still use this category. Reassign or edit them first."); return; }
+  if(!confirm('Delete category "'+cat+'" and all its subcategories?')) return;
+  delete db.categories[cat];
+  syncCategories();
+  renderCategoryManagerBody();
+}
+function deleteSubcategory(cat, sub){
+  const inUse = db.stock.some(s=>s.category===cat && s.subcategory===sub);
+  if(inUse){ alert("Can't delete — some products still use this subcategory. Reassign or edit them first."); return; }
+  if(!db.categories[cat]) return;
+  db.categories[cat].subs = (db.categories[cat].subs||[]).filter(x=>x!==sub);
+  syncCategories();
+  renderCategoryManagerBody();
+}
+window.renameCategory = renameCategory;
+window.deleteCategory = deleteCategory;
+window.deleteSubcategory = deleteSubcategory;
 function syncCategories(){
   if(CLOUD_MODE){
     fsDB.collection('categories').doc('main').set({data: db.categories}, {merge:false}).catch(e=>console.error(e));
@@ -513,10 +576,11 @@ function renderPurchase(){
         <div class="field"><label>Rate per box</label><input type="number" value="${it.rate||''}" placeholder="0" oninput="updatePurchaseItem(${idx},'rate',this.value)"/></div>
         <div class="field"><label>MRP per box</label><input type="number" value="${it.mrp||''}" placeholder="0" oninput="updatePurchaseItem(${idx},'mrp',this.value)"/></div>
       </div>
-      <div class="field"><label>GST %</label>
-        <select onchange="updatePurchaseItem(${idx},'gst',this.value)">
-          ${[0,5,12,18,28].map(g=>`<option value="${g}" ${Number(it.gst)===g?'selected':''}>${g}%</option>`).join('')}
-        </select>
+      <div class="field"><label>GST % (tap a common rate, or type any)</label>
+        <input type="number" value="${it.gst}" oninput="updatePurchaseItem(${idx},'gst',this.value)"/>
+        <div class="free-chip-row" style="margin-top:6px;">
+          ${[0,5,12,18,28].map(g=>`<span class="chip" onclick="updatePurchaseItem(${idx},'gst','${g}');render()">${g}%</span>`).join('')}
+        </div>
       </div>
       ${it.sku ? `<div class="sku-chip">SKU: ${it.sku}</div>` : ''}
       <div style="margin-top:8px;font-size:12px;color:var(--ink-500);">Taxable ${fmt(br.taxable)} • GST ${fmt(br.gst)} • Line total <b style="color:var(--clay-900);">${fmt(br.total)}</b></div>
@@ -639,8 +703,7 @@ function savePurchase(){
   db.purchases.push({id, billNo, date:todayStr(), supplier:purchaseDraft.supplier||'Unknown supplier', partyId:purchaseDraft.partyId||null, amountPaid:purchaseAmountPaid, gstMode:purchaseDraft.gstMode, items:valid, totalAmount, totalGst, additionalCharges:purchaseDraft.additionalCharges||[], additionalChargesTotal:chargesTotal, actualAmountPaid:actualPaidTotal});
   saveDB(db);
   purchaseDraft = {supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:''};
-  alert('Purchase saved. Stock updated.');
-  setScreen('stock');
+  openPrintPreview('purchase', id);
 }
 
 /* ---- Purchase Return (to distributor) ---- */
@@ -742,8 +805,7 @@ function savePurchaseReturn(){
   db.purchaseReturns.push({id, billNo, date:todayStr(), items:valid, totalAmount, totalGst, gstMode:purchaseReturnDraft.gstMode});
   saveDB(db);
   purchaseReturnDraft = {gstMode:'excluded', items:[]};
-  alert('Purchase return saved. Stock updated.');
-  setScreen('stock');
+  openPrintPreview('purchaseReturn', id);
 }
 async function savePurchaseReturnCloud(){
   const valid = purchaseReturnDraft.items.filter(it=>Number(it.qty)>0);
@@ -771,8 +833,7 @@ async function savePurchaseReturnCloud(){
       tx.set(retRef, {billNo, date:todayStr(), items:valid, totalAmount, totalGst, gstMode:purchaseReturnDraft.gstMode, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     });
     purchaseReturnDraft = {gstMode:'excluded', items:[]};
-    alert('Purchase return saved to cloud. Stock updated on every device.');
-    setScreen('stock');
+    openPrintPreview('purchaseReturn', retRef.id);
   }catch(e){ console.error(e); alert(e.message); }
 }
 window.renderPReturnSearchResults = renderPReturnSearchResults;
@@ -828,10 +889,11 @@ function renderOpeningStock(){
         <div class="field"><label>Cost per box (incl. GST)</label><input type="number" value="${it.cost||''}" placeholder="0" oninput="updateOpeningStockItem(${idx},'cost',this.value)"/></div>
         <div class="field"><label>MRP per box (incl. GST)</label><input type="number" value="${it.mrp||''}" placeholder="0" oninput="updateOpeningStockItem(${idx},'mrp',this.value)"/></div>
       </div>
-      <div class="field"><label>GST %</label>
-        <select onchange="updateOpeningStockItem(${idx},'gst',this.value)">
-          ${[0,5,12,18,28].map(g=>`<option value="${g}" ${Number(it.gst)===g?'selected':''}>${g}%</option>`).join('')}
-        </select>
+      <div class="field"><label>GST % (tap a common rate, or type any)</label>
+        <input type="number" value="${it.gst}" oninput="updateOpeningStockItem(${idx},'gst',this.value)"/>
+        <div class="free-chip-row" style="margin-top:6px;">
+          ${[0,5,12,18,28].map(g=>`<span class="chip" onclick="updateOpeningStockItem(${idx},'gst','${g}');render()">${g}%</span>`).join('')}
+        </div>
       </div>
       <div class="step">Opening value (incl. GST): <b>${fmt(Number(it.qty||0)*Number(it.cost||0))}</b></div>
     </div>`;
@@ -1125,10 +1187,12 @@ function renderSales(){
     <div class="card">
       <h3>Bill summary</h3>
       <div class="total-line"><span>Item total</span><span>${fmt(totals.gross)}</span></div>
-      <div class="total-line"><span>Discount</span><span>-${fmt(totals.disc)}</span></div>
+      <div class="total-line"><span>Item-level discount</span><span>-${fmt(totals.disc)}</span></div>
       <div class="total-line"><span>GST${gstMode==='included'?' (included above)':''}</span><span>${fmt(totals.gst)}</span></div>
+      <div class="field" style="margin-top:8px;"><label>Bill discount % (optional, applied on top)</label><input type="number" value="${saleDraft.billDiscount||''}" placeholder="0" oninput="saleDraft.billDiscount=Number(this.value);render()"/></div>
+      ${saleDraft.billDiscount>0 ? `<div class="total-line"><span>Bill discount</span><span>-${fmt(totals.total*saleDraft.billDiscount/100)}</span></div>` : ''}
       <div class="total-line"><span>Additional charges</span><span>${fmt((saleDraft.additionalCharges||[]).reduce((a,c)=>a+Number(c.amount||0),0))}</span></div>
-      <div class="total-line grand"><span>Customer pays</span><span>${fmt(totals.total+(saleDraft.additionalCharges||[]).reduce((a,c)=>a+Number(c.amount||0),0))}</span></div>
+      <div class="total-line grand"><span>Customer pays</span><span>${fmt(totals.total*(1-(saleDraft.billDiscount||0)/100)+(saleDraft.additionalCharges||[]).reduce((a,c)=>a+Number(c.amount||0),0))}</span></div>
     </div>
     <button class="btn btn-primary" onclick="saveSale()">Save bill</button>
     ` : ''}
@@ -1183,14 +1247,18 @@ function saveSale(){
     it.costAtSale = s ? (s.avgCost!=null ? s.avgCost : (s.purchaseRate||0)) : 0;
     s.qty -= (Number(it.boxQty||0)*it.piecesPerBox + Number(it.pieceQty||0));
   });
+  const billDiscountPct = Number(saleDraft.billDiscount)||0;
+  const billDiscountAmount = totalAmount*billDiscountPct/100;
+  totalAmount -= billDiscountAmount;
+  totalGst = totalGst*(1-billDiscountPct/100);
+  totalDiscount += billDiscountAmount;
   const chargesTotal = (saleDraft.additionalCharges||[]).reduce((a,c)=>a+Number(c.amount||0),0);
   const grandTotal = totalAmount+chargesTotal;
   const saleAmountPaid = saleDraft.partyId ? (saleDraft.paidInFull!==false ? grandTotal : Number(saleDraft.amountPaid)||0) : grandTotal;
-  db.sales.push({id, billNo, date:todayStr(), customer:saleDraft.customer||'Walk-in', partyId:saleDraft.partyId||null, amountPaid:saleAmountPaid, gstMode:saleDraft.gstMode, items:saleDraft.items, totalAmount:grandTotal, totalGst, totalDiscount, additionalCharges:saleDraft.additionalCharges||[], additionalChargesTotal:chargesTotal});
+  db.sales.push({id, billNo, date:todayStr(), customer:saleDraft.customer||'Walk-in', partyId:saleDraft.partyId||null, amountPaid:saleAmountPaid, gstMode:saleDraft.gstMode, items:saleDraft.items, totalAmount:grandTotal, totalGst, totalDiscount, additionalCharges:saleDraft.additionalCharges||[], additionalChargesTotal:chargesTotal, billDiscountPct});
   saveDB(db);
-  saleDraft = {customer:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'included', items:[], additionalCharges:[]};
-  alert('Bill saved. Stock updated.');
-  render();
+  saleDraft = {customer:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'included', items:[], additionalCharges:[], billDiscount:0};
+  openPrintPreview('sale', id);
 }
 
 /* ---- Sale Return (from customer) ---- */
@@ -1281,8 +1349,7 @@ function saveSaleReturn(){
   db.saleReturns.push({id, billNo, date:todayStr(), refSaleId:saleReturnDraft.sale.billNo, items:valid, totalAmount, totalGst});
   saveDB(db);
   saleReturnDraft = {sale:null, items:[]};
-  alert('Sale return saved. Stock updated.');
-  setScreen('stock');
+  openPrintPreview('saleReturn', id);
 }
 async function saveSaleReturnCloud(){
   const valid = saleReturnDraft.items.filter(it=> (Number(it.boxQty)>0 || Number(it.pieceQty)>0)
@@ -1306,8 +1373,7 @@ async function saveSaleReturnCloud(){
     batchWrite.set(retRef, {billNo, date:todayStr(), refSaleId:saleReturnDraft.sale.billNo, items:valid, totalAmount, totalGst, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     await batchWrite.commit();
     saleReturnDraft = {sale:null, items:[]};
-    alert('Sale return saved to cloud. Stock updated on every device.');
-    setScreen('stock');
+    openPrintPreview('saleReturn', retRef.id);
   }catch(e){ console.error(e); alert(e.message); }
 }
 window.renderSReturnSearchResults = renderSReturnSearchResults;
@@ -1319,13 +1385,13 @@ window.saveSaleReturn = saveSaleReturn;
 let stockFilter = 'all';
 function renderStock(){
   let rows = db.stock.filter(s=>s.qty>0);
-  if(stockFilter==='low') rows = rows.filter(s=>s.qty>0 && s.qty<=(s.piecesPerBox||1));
+  if(stockFilter==='low') rows = rows.filter(s=>s.qty>0 && s.qty<=lowStockThresholdFor(s));
   const q = (document.getElementById('stockSearch')?.value||'').toLowerCase();
   if(q) rows = rows.filter(s=>s.itemName.toLowerCase().includes(q));
   const rowsHtml = rows.map(s=>{
     const boxes = Math.floor(s.qty/(s.piecesPerBox||1));
     const loose = s.qty % (s.piecesPerBox||1);
-    const tag = s.qty<=(s.piecesPerBox||1) ? '<span class="tag low">Low stock</span>' : '<span class="tag ok">In stock</span>';
+    const tag = s.qty<=lowStockThresholdFor(s) ? '<span class="tag low">Low stock</span>' : '<span class="tag ok">In stock</span>';
     return `
     <div class="list-row" style="cursor:pointer;" onclick="openStockDetail('${s.id}')">
       <div><div class="li-main">${s.itemName}</div><div class="li-sub">${s.category} › ${s.subcategory||'—'} • ${s.sku}</div>${tag}</div>
@@ -1345,6 +1411,22 @@ function openStockDetail(stockId){
   billDetailCtx = {stockId};
   goTo('stockDetail');
 }
+function saveLowStockThreshold(stockId){
+  const boxes = Number(document.getElementById('lowStockBoxes').value);
+  if(boxes<0 || isNaN(boxes)){ alert('Enter a valid number of boxes.'); return; }
+  const s = db.stock.find(x=>x.id===stockId);
+  if(!s) return;
+  const thresholdPieces = boxes * (s.piecesPerBox||1);
+  if(CLOUD_MODE){
+    fsDB.collection('stock').doc(stockId).update({lowStockThreshold: thresholdPieces}).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    s.lowStockThreshold = thresholdPieces;
+    saveDB(db);
+    render();
+  }
+  alert('Low stock alert updated.');
+}
+window.saveLowStockThreshold = saveLowStockThreshold;
 function renderStockDetail(){
   const s = db.stock.find(x=>x.id===billDetailCtx.stockId);
   if(!s) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('stock')">← Back</button>`;
@@ -1366,6 +1448,14 @@ function renderStockDetail(){
       <div class="stat-grid" style="margin-top:10px;">
         <div class="stat"><div class="num">${boxes}${loose?` +${loose}pc`:''}</div><div class="lbl">In stock</div></div>
         <div class="stat"><div class="num">${fmt(s.mrp)}</div><div class="lbl">MRP / box</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Low stock alert</h3>
+      <div class="step">Flag this product as "Low stock" once it drops to this many boxes or fewer. Default is 1 box.</div>
+      <div class="row2">
+        <div class="field"><label>Boxes</label><input id="lowStockBoxes" type="number" value="${Math.floor(lowStockThresholdFor(s)/(s.piecesPerBox||1))}"/></div>
+        <button class="btn btn-ghost" style="align-self:flex-end;" onclick="saveLowStockThreshold('${s.id}')">Save</button>
       </div>
     </div>
     <div class="card">
@@ -1433,12 +1523,14 @@ function renderBillDetail(){
     <div class="card">
       <h3>${rec.billNo}</h3>
       <div class="step">${rec.date} • ${isPurchase?rec.supplier:rec.customer}</div>
+      ${isPurchase && rec.actualAmountPaid!=null ? `<div class="step">Billed: ${fmt((rec.totalAmount||0)+(rec.totalGst||0))} • Actually paid: <b>${fmt(rec.actualAmountPaid)}</b>${rec.actualAmountPaid!==(rec.totalAmount||0)+(rec.totalGst||0) ? ' (differs from billed value)' : ''}</div>` : ''}
     </div>
     <div class="card">
       <h3>Items</h3>
       ${itemsHtml || `<div class="empty">No items.</div>`}
     </div>
-    <button class="btn btn-primary" onclick="saveBillDetailEdits()">Save changes</button>
+    <button class="btn btn-ghost" onclick="openPrintPreview('${type}','${id}')">🖨 View / Print this bill</button>
+    <button class="btn btn-primary" style="margin-top:8px;" onclick="saveBillDetailEdits()">Save changes</button>
   `;
 }
 function goBackFromBillDetail(){
@@ -1459,10 +1551,7 @@ function removeBillItem(idx){
   render();
 }
 function saveBillDetailEdits(){
-  if(CLOUD_MODE){
-    alert("Editing a saved bill isn't supported yet with cloud sync on — changes here wouldn't actually persist. For a correction, use a Purchase Return / Sale Return instead, or ask me to build proper cloud editing.");
-    return;
-  }
+  if(CLOUD_MODE){ saveBillDetailEditsCloud(); return; }
   const { type, id, originalItems } = billDetailCtx;
   const isPurchase = type==='purchase';
   const rec = isPurchase ? db.purchases.find(p=>p.id===id) : db.sales.find(s=>s.id===id);
@@ -1524,6 +1613,71 @@ function saveBillDetailEdits(){
   saveDB(db);
   goBackFromBillDetail();
 }
+
+async function saveBillDetailEditsCloud(){
+  const { type, id, originalItems } = billDetailCtx;
+  const isPurchase = type==='purchase';
+  const rec = isPurchase ? db.purchases.find(p=>p.id===id) : db.sales.find(s=>s.id===id);
+  if(!rec) return;
+
+  if(isPurchase){
+    // Net stock delta per SKU: reverse what the original had, reapply the edit.
+    // Note: this adjusts quantity only — average cost isn't recalculated,
+    // same disclosed limitation as the local (non-cloud) version.
+    const deltas = {};
+    originalItems.forEach(it=>{
+      const key = it.sku || it.stockId;
+      deltas[key] = (deltas[key]||0) - (Number(it.qty)+Number(it.freeQty||0))*Number(it.piecesPerBox||1);
+    });
+    rec.items.forEach(it=>{
+      const key = it.sku || it.stockId;
+      deltas[key] = (deltas[key]||0) + (Number(it.qty)+Number(it.freeQty||0))*Number(it.piecesPerBox||1);
+    });
+    try{
+      await fsDB.runTransaction(async (tx)=>{
+        const keys = Object.keys(deltas);
+        const refs = keys.map(k=>fsDB.collection('stock').doc(k));
+        const snaps = await Promise.all(refs.map(r=>tx.get(r)));
+        snaps.forEach((snap,i)=>{
+          const current = snap.exists ? (snap.data().qty||0) : 0;
+          if(current + deltas[keys[i]] < 0) throw new Error("This edit would take some product's stock below zero (some may already be sold elsewhere).");
+        });
+        snaps.forEach((snap,i)=>{
+          tx.update(refs[i], {qty: firebase.firestore.FieldValue.increment(deltas[keys[i]])});
+        });
+        tx.update(fsDB.collection('purchases').doc(id), {items: rec.items});
+      });
+      alert('Changes saved to cloud. Note: this edit adjusts stock quantity but does not recalculate average cost — for cost corrections, use a fresh purchase entry instead.');
+      goBackFromBillDetail();
+    }catch(e){ console.error(e); alert("Can't save: "+e.message); }
+  } else {
+    const deltas = {};
+    originalItems.forEach(it=>{
+      deltas[it.stockId] = (deltas[it.stockId]||0) + (Number(it.boxQty||0)*Number(it.piecesPerBox||1) + Number(it.pieceQty||0));
+    });
+    rec.items.forEach(it=>{
+      deltas[it.stockId] = (deltas[it.stockId]||0) - (Number(it.boxQty||0)*Number(it.piecesPerBox||1) + Number(it.pieceQty||0));
+    });
+    try{
+      await fsDB.runTransaction(async (tx)=>{
+        const keys = Object.keys(deltas);
+        const refs = keys.map(k=>fsDB.collection('stock').doc(k));
+        const snaps = await Promise.all(refs.map(r=>tx.get(r)));
+        snaps.forEach((snap,i)=>{
+          const current = snap.exists ? (snap.data().qty||0) : 0;
+          if(current + deltas[keys[i]] < 0) throw new Error('Not enough stock to apply this change.');
+        });
+        snaps.forEach((snap,i)=>{
+          tx.update(refs[i], {qty: firebase.firestore.FieldValue.increment(deltas[keys[i]])});
+        });
+        tx.update(fsDB.collection('sales').doc(id), {items: rec.items});
+      });
+      alert('Changes saved to cloud. Stock adjusted to match on every device.');
+      goBackFromBillDetail();
+    }catch(e){ console.error(e); alert("Can't save: "+e.message); }
+  }
+}
+window.saveBillDetailEditsCloud = saveBillDetailEditsCloud;
 
 /* ===================== REPORTS ===================== */
 let reportMode = 'daily';
@@ -1597,11 +1751,11 @@ function renderReports(){
     </div>
     <div class="card">
       <h3>${periodLabel} sale bills (${sales.length})</h3>
-      ${sales.length ? sales.map(s=>`<div class="list-row"><div><div class="li-main">${s.billNo}</div><div class="li-sub">${s.date} • ${s.customer}</div></div><div class="li-right">${fmt(s.totalAmount)}</div></div>`).join('') : `<div class="empty">No sales recorded.</div>`}
+      ${sales.length ? sales.map(s=>`<div class="list-row" style="cursor:pointer;" onclick="openBillDetail('sale','${s.id}')"><div><div class="li-main">${s.billNo}</div><div class="li-sub">${s.date} • ${s.customer}</div></div><div class="li-right">${fmt(s.totalAmount)}</div></div>`).join('') : `<div class="empty">No sales recorded.</div>`}
     </div>
     <div class="card">
       <h3>${periodLabel} purchases (${purchases.length})</h3>
-      ${purchases.length ? purchases.map(p=>`<div class="list-row"><div><div class="li-main">${p.billNo}</div><div class="li-sub">${p.date} • ${p.supplier}</div></div><div class="li-right">${fmt(p.totalAmount+p.totalGst+(p.additionalChargesTotal||0))}</div></div>`).join('') : `<div class="empty">No purchases recorded.</div>`}
+      ${purchases.length ? purchases.map(p=>`<div class="list-row" style="cursor:pointer;" onclick="openBillDetail('purchase','${p.id}')"><div><div class="li-main">${p.billNo}</div><div class="li-sub">${p.date} • ${p.supplier}</div></div><div class="li-right">${fmt(p.totalAmount+p.totalGst+(p.additionalChargesTotal||0))}</div></div>`).join('') : `<div class="empty">No purchases recorded.</div>`}
     </div>
     <div class="card">
       <h3>${periodLabel} sale returns (${saleReturns.length})</h3>
@@ -1730,6 +1884,7 @@ function attachCloudListeners(){
   fsDB.collection('staff').onSnapshot(snap=>{ db.staff = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (staff): '+err.code+' — '+err.message); });
   fsDB.collection('staffLedger').onSnapshot(snap=>{ db.staffLedger = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (staffLedger): '+err.code+' — '+err.message); });
   fsDB.collection('openingStock').onSnapshot(snap=>{ db.openingStock = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (openingStock): '+err.code+' — '+err.message); });
+  fsDB.collection('settings').doc('shopInfo').onSnapshot(snap=>{ if(snap.exists) db.shopInfo = snap.data(); safeRender(); }, err=>console.error(err));
   fsDB.collection('categories').doc('main').onSnapshot(snap=>{ if(snap.exists) db.categories = snap.data().data || defaultCategories(); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (categories): '+err.code+' — '+err.message); });
 }
 window.openCloudModal = openCloudModal;
@@ -1788,11 +1943,11 @@ async function savePurchaseCloud(){
       });
     });
     purchaseDraft = {supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:''};
-    alert('Purchase saved to cloud. Stock updated on every device.');
-    setScreen('stock');
+    openPrintPreview('purchase', purchaseRef.id);
   }catch(e){ console.error(e); alert('Could not save: '+e.message); }
 }
 async function saveSaleCloud(){
+  const saleRefHolder = {ref:null};
   try{
     await fsDB.runTransaction(async (tx)=>{
       const refs = saleDraft.items.map(it=>fsDB.collection('stock').doc(it.stockId));
@@ -1817,19 +1972,24 @@ async function saveSaleCloud(){
       });
       const billNo = nextBillNo('sale');
       const saleRef = fsDB.collection('sales').doc();
+      saleRefHolder.ref = saleRef;
+      const billDiscountPct = Number(saleDraft.billDiscount)||0;
+      const billDiscountAmount = totalAmount*billDiscountPct/100;
+      totalAmount -= billDiscountAmount;
+      totalGst = totalGst*(1-billDiscountPct/100);
+      totalDiscount += billDiscountAmount;
       const chargesTotal = (saleDraft.additionalCharges||[]).reduce((a,c)=>a+Number(c.amount||0),0);
       const grandTotal = totalAmount+chargesTotal;
       const saleAmountPaid = saleDraft.partyId ? (saleDraft.paidInFull!==false ? grandTotal : Number(saleDraft.amountPaid)||0) : grandTotal;
       tx.set(saleRef, {
         billNo, date: todayStr(), customer: saleDraft.customer||'Walk-in', partyId: saleDraft.partyId||null,
         amountPaid: saleAmountPaid, gstMode: saleDraft.gstMode, items: saleDraft.items, totalAmount: grandTotal, totalGst, totalDiscount,
-        additionalCharges: saleDraft.additionalCharges||[], additionalChargesTotal: chargesTotal,
+        additionalCharges: saleDraft.additionalCharges||[], additionalChargesTotal: chargesTotal, billDiscountPct,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
     });
-    saleDraft = {customer:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'included', items:[], additionalCharges:[]};
-    alert('Bill saved to cloud. Stock updated on every device.');
-    render();
+    saleDraft = {customer:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'included', items:[], additionalCharges:[], billDiscount:0};
+    openPrintPreview('sale', saleRefHolder.ref.id);
   }catch(e){ console.error(e); alert(e.message); }
 }
 
@@ -1904,6 +2064,7 @@ function partyBalance(partyId){
 function totalToPay(){ return db.parties.filter(p=>p.type==='supplier').reduce((a,p)=>a+Math.max(0,partyBalance(p.id)),0); }
 function totalToCollect(){ return db.parties.filter(p=>p.type==='customer').reduce((a,p)=>a+Math.max(0,partyBalance(p.id)),0); }
 function stockValueTotal(){ return db.stock.reduce((a,s)=>a + (s.avgCost!=null ? s.qty*s.avgCost : (s.qty/(s.piecesPerBox||1))*(s.purchaseRate||0)),0); }
+function lowStockThresholdFor(s){ return s.lowStockThreshold!=null ? s.lowStockThreshold : (s.piecesPerBox||1); }
 
 function recordPayment(partyId){
   const amount = Number(document.getElementById('paymentAmount').value);
@@ -1922,6 +2083,7 @@ function recordPayment(partyId){
 }
 window.recordPayment = recordPayment;
 
+let editingPartyDetails = false;
 function renderPartyDetail(){
   const party = db.parties.find(p=>p.id===openPartyId);
   if(!party) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('parties')">← Back</button>`;
@@ -1935,13 +2097,31 @@ function renderPartyDetail(){
   return `
     <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('parties')">← Back to Ledger</button>
     <div class="card">
-      <h3>${party.name}</h3>
-      <div class="step">${party.phone||'No phone on file'} ${party.address?'• '+party.address:''}</div>
-      ${party.gstin ? `<div class="step">GSTIN: ${party.gstin}</div>` : ''}
-      <div class="stat-grid" style="margin-top:10px;">
-        <div class="stat"><div class="num">${fmt(total)}</div><div class="lbl">Total ${isSupplier?'purchased from':'sold to'}</div></div>
-        <div class="stat"><div class="num" style="color:${bal>0?'var(--red-700)':'var(--green-heading)'};">${fmt(Math.abs(bal))}</div><div class="lbl">${bal>0 ? (isSupplier?'You owe them':'They owe you') : 'Settled up'}</div></div>
-      </div>
+      ${editingPartyDetails ? `
+        <h3>Edit details</h3>
+        <div class="field"><label>Name</label><input id="editPartyName" value="${party.name}"/></div>
+        <div class="row2">
+          <div class="field"><label>Phone</label><input id="editPartyPhone" value="${party.phone||''}"/></div>
+          <div class="field"><label>GSTIN</label><input id="editPartyGstin" value="${party.gstin||''}"/></div>
+        </div>
+        <div class="field"><label>Address</label><input id="editPartyAddress" value="${party.address||''}"/></div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-primary" style="flex:1;" onclick="savePartyEdits('${party.id}')">Save</button>
+          <button class="btn btn-ghost" style="flex:1;" onclick="editingPartyDetails=false;render()">Cancel</button>
+        </div>
+      ` : `
+        <h3>${party.name}</h3>
+        <div class="step">${party.phone||'No phone on file'} ${party.address?'• '+party.address:''}</div>
+        ${party.gstin ? `<div class="step">GSTIN: ${party.gstin}</div>` : ''}
+        <div class="stat-grid" style="margin-top:10px;">
+          <div class="stat"><div class="num">${fmt(total)}</div><div class="lbl">Total ${isSupplier?'purchased from':'sold to'}</div></div>
+          <div class="stat"><div class="num" style="color:${bal>0?'var(--red-700)':'var(--green-heading)'};">${fmt(Math.abs(bal))}</div><div class="lbl">${bal>0 ? (isSupplier?'You owe them':'They owe you') : 'Settled up'}</div></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button class="btn btn-ghost" style="flex:1;" onclick="editingPartyDetails=true;render()">✏️ Edit details</button>
+          <button class="btn btn-danger" style="flex:1;" onclick="deleteParty('${party.id}')">🗑 Delete</button>
+        </div>
+      `}
     </div>
     <div class="card">
       <h3>Record a payment</h3>
@@ -1961,8 +2141,45 @@ function renderPartyDetail(){
     </div>
   `;
 }
+function savePartyEdits(partyId){
+  const name = document.getElementById('editPartyName').value.trim();
+  if(!name){ alert('Name cannot be empty.'); return; }
+  const updates = {
+    name,
+    phone: document.getElementById('editPartyPhone').value.trim(),
+    gstin: document.getElementById('editPartyGstin').value.trim(),
+    address: document.getElementById('editPartyAddress').value.trim()
+  };
+  if(CLOUD_MODE){
+    fsDB.collection('parties').doc(partyId).update(updates).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    const p = db.parties.find(x=>x.id===partyId);
+    if(p) Object.assign(p, updates);
+    saveDB(db);
+  }
+  editingPartyDetails = false;
+  render();
+}
+function deleteParty(partyId){
+  const party = db.parties.find(p=>p.id===partyId);
+  if(!party) return;
+  const hasBills = party.type==='supplier'
+    ? db.purchases.some(p=>p.partyId===partyId)
+    : db.sales.some(s=>s.partyId===partyId);
+  if(hasBills){ alert("Can't delete — this party has bills linked to them, and deleting would lose that ledger history."); return; }
+  if(!confirm('Delete '+party.name+'? This cannot be undone.')) return;
+  if(CLOUD_MODE){
+    fsDB.collection('parties').doc(partyId).delete().catch(e=>alert('Could not delete: '+e.message));
+  } else {
+    db.parties = db.parties.filter(p=>p.id!==partyId);
+    saveDB(db);
+  }
+  setScreen('parties');
+}
 window.saveParty = saveParty;
 window.openPartyDetail = openPartyDetail;
+window.savePartyEdits = savePartyEdits;
+window.deleteParty = deleteParty;
 
 /* ===================== LEDGER SUB-VIEWS ===================== */
 let ledgerViewKind = null;
@@ -2193,6 +2410,7 @@ function saveStaff(){
 }
 let openStaffId = null;
 function openStaffDetail(id){ openStaffId = id; goTo('staffDetail'); }
+let editingStaffDetails = false;
 function renderStaffDetail(){
   const staff = db.staff.find(s=>s.id===openStaffId);
   if(!staff) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('staffList')">← Back</button>`;
@@ -2201,9 +2419,27 @@ function renderStaffDetail(){
   return `
     <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('staffList')">← Back to Staff Ledger</button>
     <div class="card">
-      <h3>${staff.name}</h3>
-      <div class="step">${staff.role||''} ${staff.phone?'• '+staff.phone:''} ${staff.monthlySalary?'• Salary: '+fmt(staff.monthlySalary)+'/month':''}</div>
-      <div class="stat" style="margin-top:10px;"><div class="num" style="color:${bal>0?'var(--red-700)':'var(--green-heading)'};">${fmt(Math.abs(bal))}</div><div class="lbl">${bal>0?'Pending balance owed to staff':'Settled up'}</div></div>
+      ${editingStaffDetails ? `
+        <h3>Edit details</h3>
+        <div class="field"><label>Name</label><input id="editStaffName" value="${staff.name}"/></div>
+        <div class="row2">
+          <div class="field"><label>Role</label><input id="editStaffRole" value="${staff.role||''}"/></div>
+          <div class="field"><label>Phone</label><input id="editStaffPhone" value="${staff.phone||''}"/></div>
+        </div>
+        <div class="field"><label>Monthly salary (optional)</label><input id="editStaffSalary" type="number" value="${staff.monthlySalary||''}"/></div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-primary" style="flex:1;" onclick="saveStaffEdits('${staff.id}')">Save</button>
+          <button class="btn btn-ghost" style="flex:1;" onclick="editingStaffDetails=false;render()">Cancel</button>
+        </div>
+      ` : `
+        <h3>${staff.name}</h3>
+        <div class="step">${staff.role||''} ${staff.phone?'• '+staff.phone:''} ${staff.monthlySalary?'• Salary: '+fmt(staff.monthlySalary)+'/month':''}</div>
+        <div class="stat" style="margin-top:10px;"><div class="num" style="color:${bal>0?'var(--red-700)':'var(--green-heading)'};">${fmt(Math.abs(bal))}</div><div class="lbl">${bal>0?'Pending balance owed to staff':'Settled up'}</div></div>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button class="btn btn-ghost" style="flex:1;" onclick="editingStaffDetails=true;render()">✏️ Edit details</button>
+          <button class="btn btn-danger" style="flex:1;" onclick="deleteStaff('${staff.id}')">🗑 Delete</button>
+        </div>
+      `}
     </div>
     <div class="card">
       <h3>Add entry</h3>
@@ -2260,7 +2496,42 @@ function saveStaffEntry(staffId){
     }
   }
 }
+function saveStaffEdits(staffId){
+  const name = document.getElementById('editStaffName').value.trim();
+  if(!name){ alert('Name cannot be empty.'); return; }
+  const updates = {
+    name,
+    role: document.getElementById('editStaffRole').value.trim(),
+    phone: document.getElementById('editStaffPhone').value.trim(),
+    monthlySalary: Number(document.getElementById('editStaffSalary').value)||0
+  };
+  if(CLOUD_MODE){
+    fsDB.collection('staff').doc(staffId).update(updates).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    const s = db.staff.find(x=>x.id===staffId);
+    if(s) Object.assign(s, updates);
+    saveDB(db);
+  }
+  editingStaffDetails = false;
+  render();
+}
+function deleteStaff(staffId){
+  const staff = db.staff.find(s=>s.id===staffId);
+  if(!staff) return;
+  const hasEntries = db.staffLedger.some(e=>e.staffId===staffId);
+  if(hasEntries){ alert("Can't delete — this staff member has salary/payment history, and deleting would lose that record."); return; }
+  if(!confirm('Delete '+staff.name+'? This cannot be undone.')) return;
+  if(CLOUD_MODE){
+    fsDB.collection('staff').doc(staffId).delete().catch(e=>alert('Could not delete: '+e.message));
+  } else {
+    db.staff = db.staff.filter(s=>s.id!==staffId);
+    saveDB(db);
+  }
+  setScreen('staffList');
+}
 window.openStaffDetail = openStaffDetail;
+window.saveStaffEdits = saveStaffEdits;
+window.deleteStaff = deleteStaff;
 window.saveStaff = saveStaff;
 window.saveStaffEntry = saveStaffEntry;
 
@@ -2310,15 +2581,19 @@ function renderPnL(){
   let salesTaxable = 0, cogs = 0, saleChargesTotal = 0;
   sales.forEach(s=>{
     saleChargesTotal += (s.additionalChargesTotal||0);
+    let saleTaxableSubtotal = 0;
     (s.items||[]).forEach(it=>{
       const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
       const disc = gross*Number(it.discount||0)/100;
       const net = gross-disc;
       const br = gstBreakdown(net, Number(it.gst), s.gstMode);
-      salesTaxable += br.taxable;
+      saleTaxableSubtotal += br.taxable;
       const piecesSold = Number(it.boxQty||0)*(it.piecesPerBox||1) + Number(it.pieceQty||0);
       cogs += piecesSold * (it.costAtSale!=null ? it.costAtSale : 0);
     });
+    // A bill-level discount (applied on top of item-level ones) reduces
+    // revenue the same way it reduced what the customer actually paid.
+    salesTaxable += saleTaxableSubtotal * (1 - (s.billDiscountPct||0)/100);
   });
   const saleReturnTaxable = saleReturns.reduce((a,r)=>{
     return a + (r.items||[]).reduce((a2,it)=>{
@@ -2388,6 +2663,116 @@ function renderPnL(){
   `;
 }
 
+/* ===================== SHOP SETTINGS ===================== */
+function renderShopSettings(){
+  const s = db.shopInfo || {name:'Hammad World', gstin:'', address:'', phone:''};
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
+    <div class="card">
+      <h3>Shop details</h3>
+      <div class="step">Shown on every printed Sale Bill, Purchase Bill, and Return document.</div>
+      <div class="field"><label>Shop name</label><input id="shopName" value="${s.name||''}"/></div>
+      <div class="field"><label>GSTIN</label><input id="shopGstin" value="${s.gstin||''}" placeholder="18ADOPH1433M1ZB"/></div>
+      <div class="field"><label>Address</label><input id="shopAddress" value="${s.address||''}"/></div>
+      <div class="field"><label>Phone (optional)</label><input id="shopPhone" value="${s.phone||''}"/></div>
+      <button class="btn btn-primary" onclick="saveShopInfo()">Save</button>
+    </div>
+  `;
+}
+function saveShopInfo(){
+  const info = {
+    name: document.getElementById('shopName').value.trim() || 'Hammad World',
+    gstin: document.getElementById('shopGstin').value.trim(),
+    address: document.getElementById('shopAddress').value.trim(),
+    phone: document.getElementById('shopPhone').value.trim()
+  };
+  db.shopInfo = info;
+  if(CLOUD_MODE){
+    fsDB.collection('settings').doc('shopInfo').set(info).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    saveDB(db);
+  }
+  alert('Shop details saved.');
+  setScreen('dashboard');
+}
+window.saveShopInfo = saveShopInfo;
+
+/* ===================== PRINTABLE DOCUMENTS ===================== */
+let printDoc = null;
+function openPrintPreview(type, id){
+  printDoc = {type, id};
+  goTo('printPreview');
+}
+function closePrintPreview(back){ printDoc = null; setScreen(back||'dashboard'); }
+function printNow(){ window.print(); }
+function renderPrintPreview(){
+  if(!printDoc) return `<div class="empty">Nothing to show.</div>`;
+  const { type, id } = printDoc;
+  const shop = db.shopInfo || {name:'Hammad World'};
+  let record, docTitle, refLine;
+  if(type==='purchase'){ record = db.purchases.find(p=>p.id===id); docTitle='Purchase Bill'; refLine='Supplier: '+(record?record.supplier:''); }
+  else if(type==='sale'){ record = db.sales.find(s=>s.id===id); docTitle='Sale Bill'; refLine='Customer: '+(record?record.customer:''); }
+  else if(type==='purchaseReturn'){ record = db.purchaseReturns.find(r=>r.id===id); docTitle='Purchase Return / Debit Note'; refLine='Return to distributor'; }
+  else if(type==='saleReturn'){ record = db.saleReturns.find(r=>r.id===id); docTitle='Sale Return / Credit Note'; refLine='Against bill: '+(record?record.refSaleId:''); }
+  if(!record) return `<div class="empty">Document not found.</div><button class="btn btn-ghost" onclick="closePrintPreview()">← Back</button>`;
+
+  const isPurchaseSide = (type==='purchase' || type==='purchaseReturn');
+  const items = record.items||[];
+  const rows = items.map(it=>{
+    if(isPurchaseSide){
+      const qty = it.qty||0, rate=it.rate||0, gst=it.gst||0;
+      const amt = qty*rate;
+      return `<tr><td>${it.itemName||''}${it.batch?` (${it.batch})`:''}</td><td class="num">${qty} box</td><td class="num">${fmt(rate)}</td><td class="num">${gst}%</td><td class="num">${fmt(amt)}</td></tr>`;
+    } else {
+      const boxQty=it.boxQty||0, pieceQty=it.pieceQty||0, boxPrice=it.boxPrice||0, piecePrice=it.piecePrice||0, gst=it.gst||0;
+      const amt = boxQty*boxPrice + pieceQty*piecePrice;
+      const qtyLabel = boxQty+(pieceQty?` box +${pieceQty}pc`:' box');
+      return `<tr><td>${it.itemName||''}${it.batch?` (${it.batch})`:''}</td><td class="num">${qtyLabel}</td><td class="num">${fmt(boxPrice)}</td><td class="num">${gst}%</td><td class="num">${fmt(amt)}</td></tr>`;
+    }
+  }).join('');
+
+  const taxable = record.totalAmount||0;
+  const gstAmt = record.totalGst||0;
+  const charges = record.additionalChargesTotal||0;
+  const inclusive = (type==='sale' || type==='saleReturn');
+  const grand = inclusive ? taxable+charges : taxable+gstAmt+charges;
+  const taxableDisplay = inclusive ? taxable-gstAmt : taxable;
+
+  return `
+    <div id="printArea">
+      <div class="card">
+        <div style="text-align:center;margin-bottom:14px;">
+          <div style="font-size:16px;font-weight:800;color:var(--heading-violet, var(--clay-900));">${shop.name||'Hammad World'}</div>
+          <div style="font-size:11px;color:var(--ink-500);margin-top:2px;">${shop.gstin?'GSTIN: '+shop.gstin:''}</div>
+          <div style="font-size:11px;color:var(--ink-500);">${shop.address||''}${shop.phone?' • '+shop.phone:''}</div>
+          <div style="display:inline-block;margin-top:10px;font-size:12.5px;font-weight:700;background:var(--stone-200);padding:4px 12px;border-radius:20px;color:var(--clay-700);">${docTitle}</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-500);margin-bottom:10px;border-bottom:1px dashed var(--line);padding-bottom:10px;">
+          <span>Doc no: <b style="color:var(--ink-900);">${record.billNo||record.id}</b></span>
+          <span>Date: <b style="color:var(--ink-900);">${record.date}</b></span>
+        </div>
+        <div class="step" style="margin-bottom:10px;">${refLine}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">
+          <thead><tr><th style="text-align:left;font-size:10.5px;color:var(--ink-500);border-bottom:1.5px solid var(--line);padding:6px 4px;">Item</th><th style="text-align:right;font-size:10.5px;color:var(--ink-500);border-bottom:1.5px solid var(--line);padding:6px 4px;">Qty</th><th style="text-align:right;font-size:10.5px;color:var(--ink-500);border-bottom:1.5px solid var(--line);padding:6px 4px;">Rate</th><th style="text-align:right;font-size:10.5px;color:var(--ink-500);border-bottom:1.5px solid var(--line);padding:6px 4px;">GST</th><th style="text-align:right;font-size:10.5px;color:var(--ink-500);border-bottom:1.5px solid var(--line);padding:6px 4px;">Amount</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="total-line"><span>Taxable value</span><span>${fmt(taxableDisplay)}</span></div>
+        <div class="total-line"><span>GST${inclusive?' (included above)':''}</span><span>${fmt(gstAmt)}</span></div>
+        ${charges>0 ? `<div class="total-line"><span>Additional charges</span><span>${fmt(charges)}</span></div>` : ''}
+        <div class="total-line grand"><span>Total</span><span>${fmt(grand)}</span></div>
+        <div class="step" style="margin-top:14px;text-align:center;">This is a system-generated document from ${shop.name||'Hammad World'}.</div>
+      </div>
+    </div>
+    <div class="no-print" style="display:flex;gap:8px;">
+      <button class="btn btn-ghost" onclick="closePrintPreview()">← Back</button>
+      <button class="btn btn-primary" onclick="printNow()">🖨 Print / Save as PDF</button>
+    </div>
+  `;
+}
+window.openPrintPreview = openPrintPreview;
+window.closePrintPreview = closePrintPreview;
+window.printNow = printNow;
+
 function exportBackup(){
   const blob = new Blob([JSON.stringify(db,null,2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -2407,6 +2792,12 @@ function importBackup(file){
       if(!db.parties) db.parties=[];
       if(!db.payments) db.payments=[];
       if(!db.categories) db.categories = defaultCategories();
+      if(!db.purchaseReturns) db.purchaseReturns=[];
+      if(!db.saleReturns) db.saleReturns=[];
+      if(!db.expenses) db.expenses=[];
+      if(!db.staff) db.staff=[];
+      if(!db.staffLedger) db.staffLedger=[];
+      if(!db.openingStock) db.openingStock=[];
       saveDB(db);
       alert('Backup restored.');
       render();
