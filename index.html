@@ -2004,13 +2004,23 @@ window.addEventListener('offline', updateCloudBadge);
 function showCloudConnectError(message){
   const main = document.getElementById('main');
   if(!main) return;
+  const fbUser = firebase.auth().currentUser;
+  const projectId = (getStoredConfig()||{}).projectId || 'unknown';
   main.innerHTML = `
     <div class="card">
       <h3>Couldn't connect to cloud sync</h3>
       <div class="step">${message}</div>
-      <div class="step">Check: Firestore rules published, Email/Password sign-in enabled, your user role set to "owner" in the users collection, config pasted exactly.</div>
+      <div class="step" style="background:var(--stone-200);padding:10px;border-radius:9px;">
+        <b>Diagnostics (read this before checking Firebase):</b><br>
+        Signed in: <b>${fbUser ? 'Yes — '+(fbUser.email||fbUser.uid) : 'No'}</b><br>
+        Firebase project this app is connected to: <b>${projectId}</b><br>
+        Detected role: <b>${serverRole || 'not determined'}</b>
+      </div>
+      <div class="step">${!fbUser ? '<b>You are not actually signed in</b> — sign in again below.' : '<b>You ARE signed in</b>, so this is a rules/project problem, not a login problem: make sure the project name above matches exactly what\'s open in Firebase Console when you check Rules — it\'s easy to accidentally edit a different project if you have more than one.'}</div>
       <button class="btn btn-primary" onclick="location.reload()">Retry</button>
-      <button class="btn btn-ghost" style="margin-top:8px;" onclick="disconnectCloud()">Go back to local only</button>
+      ${CLOUD_MODE ? `<button class="btn btn-ghost" style="margin-top:8px;" onclick="doLogout()">Sign out and sign in again</button>` : ''}
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="openCloudModal()">Review Firebase config / rules</button>
+      <button class="btn btn-danger" style="margin-top:8px;" onclick="disconnectCloud()">Go back to local only</button>
     </div>
   `;
 }
