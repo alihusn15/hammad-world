@@ -207,11 +207,70 @@ function loadDB(){
     if(!d.staffLedger) d.staffLedger=[];
     if(!d.openingStock) d.openingStock=[];
     if(!d.shopInfo) d.shopInfo={name:'Hammad World', gstin:'', address:'', phone:''};
+    if(!d.quotations) d.quotations=[];
+    if(!d.auditLog) d.auditLog=[];
     return d; }catch(e){} }
-  return { stock:[], purchases:[], sales:[], parties:[], payments:[], purchaseReturns:[], saleReturns:[], expenses:[], staff:[], staffLedger:[], openingStock:[], categories: defaultCategories(), shopInfo:{name:'Hammad World', gstin:'', address:'', phone:''}, seqs:{} };
+  return { stock:[], purchases:[], sales:[], parties:[], payments:[], purchaseReturns:[], saleReturns:[], expenses:[], staff:[], staffLedger:[], openingStock:[], quotations:[], auditLog:[], categories: defaultCategories(), shopInfo:{name:'Hammad World', gstin:'', address:'', phone:''}, seqs:{} };
 }
 function saveDB(db){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
 let db = loadDB();
+
+/* ===================== USER ROLES =====================
+   IMPORTANT — honest limitation: this hides cost/profit screens from staff on
+   the device they're using. It is NOT bank-grade security — someone determined
+   and technical could bypass it in the browser. It's designed to stop casual
+   viewing (a staff member tapping around and seeing your margins), which is the
+   realistic risk in a shop. For true enforcement you'd need per-user Firebase
+   accounts with server-side rules, which is a much bigger build. */
+const ROLE_KEY = 'hw_role';
+const OWNER_PIN_KEY = 'hw_owner_pin';
+function currentRole(){ return localStorage.getItem(ROLE_KEY) || 'owner'; }
+/* In cloud mode the role comes from the database and is enforced by Firestore
+   rules on Google's servers. In local-only mode there's no server, so it falls
+   back to the device PIN — which is convenience-level protection only. */
+function isOwner(){
+  if(CLOUD_MODE) return serverRole === 'owner';
+  return currentRole()==='owner';
+}
+function getOwnerPin(){ return localStorage.getItem(OWNER_PIN_KEY) || ''; }
+function setRole(role){ localStorage.setItem(ROLE_KEY, role); }
+
+function switchToStaffMode(){
+  if(!getOwnerPin()){
+    alert('Set an owner PIN first (Shop details → Owner PIN), otherwise you won\'t be able to switch back.');
+    return;
+  }
+  if(!confirm('Switch to Staff mode? Cost prices, profit, expenses and ledgers will be hidden until the owner PIN is entered.')) return;
+  setRole('staff');
+  setScreen('dashboard');
+}
+function switchToOwnerMode(){
+  const pin = prompt('Enter owner PIN:');
+  if(pin===null) return;
+  if(pin !== getOwnerPin()){ alert('Incorrect PIN.'); return; }
+  setRole('owner');
+  setScreen('dashboard');
+}
+window.switchToStaffMode = switchToStaffMode;
+window.switchToOwnerMode = switchToOwnerMode;
+
+/* ===================== AUDIT TRAIL ===================== */
+function logAudit(action, detail){
+  const entry = {
+    action, detail,
+    role: currentRole(),
+    at: new Date().toISOString()
+  };
+  if(CLOUD_MODE && typeof fsDB!=='undefined' && fsDB){
+    fsDB.collection('auditLog').add(Object.assign({}, entry, {createdAt:firebase.firestore.FieldValue.serverTimestamp()})).catch(e=>console.error('audit', e));
+  } else {
+    if(!db.auditLog) db.auditLog=[];
+    db.auditLog.push(Object.assign({id: nextId('AUD')}, entry));
+    // keep the local log from growing without bound
+    if(db.auditLog.length>500) db.auditLog = db.auditLog.slice(-500);
+    saveDB(db);
+  }
+}
 
 function nextId(prefix){
   if(!db.seqs[prefix]) db.seqs[prefix] = 1;
@@ -226,6 +285,31 @@ function nextBillNo(kind){
   const n = db.seqs[key];
   db.seqs[key] += 1;
   return formatBillNo(kind, n);
+}
+/* In cloud mode the in-memory counter above resets on every page load, which
+   would hand out duplicate bill numbers and SKUs. These allocate from a
+   Firestore counter inside a transaction instead, so numbers stay unique
+   across reloads and across devices. */
+async function nextBillNoCloud(kind){
+  const counterRef = fsDB.collection('meta').doc('billCounter_'+kind);
+  return await fsDB.runTransaction(async (tx)=>{
+    const snap = await tx.get(counterRef);
+    const current = snap.exists ? (snap.data().seq||0) : 0;
+    const next = current+1;
+    tx.set(counterRef, {seq: next}, {merge:true});
+    return formatBillNo(kind, next);
+  });
+}
+async function nextSkuCloud(category){
+  const prefix = (category||'GEN').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase() || 'GEN';
+  const counterRef = fsDB.collection('meta').doc('skuCounter_'+prefix);
+  return await fsDB.runTransaction(async (tx)=>{
+    const snap = await tx.get(counterRef);
+    const current = snap.exists ? (snap.data().seq||0) : 0;
+    const next = current+1;
+    tx.set(counterRef, {seq: next}, {merge:true});
+    return prefix+'-'+String(next).padStart(5,'0');
+  });
 }
 function nextSku(category){
   const prefix = (category||'GEN').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase() || 'GEN';
@@ -318,6 +402,10 @@ const titles = {
   staffDetail:['Staff ledger','Salary payments & advances'],
   pnl:['Profit & Loss','True cost, GST kept separate'],
   shopSettings:['Shop details','Used on every printed bill'],
+  quotations:['Quotations','Estimates that convert to bills'],
+  auditLog:['Activity log','Who did what, and when'],
+  users:['Users & roles','Who can see what'],
+  reminders:['Payment reminders','Overdue customer balances'],
   printPreview:['Document','Preview & print']
 };
 
@@ -350,6 +438,10 @@ function render(){
   if(currentScreen==='staffDetail'){ main.innerHTML = renderStaffDetail(); return; }
   if(currentScreen==='pnl'){ main.innerHTML = renderPnL(); return; }
   if(currentScreen==='shopSettings'){ main.innerHTML = renderShopSettings(); return; }
+  if(currentScreen==='quotations'){ main.innerHTML = renderQuotations(); return; }
+  if(currentScreen==='auditLog'){ main.innerHTML = renderAuditLog(); return; }
+  if(currentScreen==='users'){ main.innerHTML = renderUsers(); return; }
+  if(currentScreen==='reminders'){ main.innerHTML = renderReminders(); return; }
   if(currentScreen==='printPreview'){ main.innerHTML = renderPrintPreview(); return; }
   if(currentScreen==='dashboard') main.innerHTML = renderDashboard();
   else if(currentScreen==='purchase') main.innerHTML = renderPurchase();
@@ -375,13 +467,15 @@ function renderDashboard(){
 
   return `
     <div class="stat-grid">
+      ${isOwner() ? `
       <div class="stat"><div class="num">${fmt(purchaseTotal)}</div><div class="lbl">Purchase</div></div>
       <div class="stat"><div class="num">${fmt(salesTotal)}</div><div class="lbl">Sale</div></div>
       <div class="stat" style="cursor:pointer;" onclick="openLedgerView('creditors')"><div class="num" style="color:var(--red-700);">${fmt(totalToPay())}</div><div class="lbl">To Pay (Supplier)</div></div>
       <div class="stat" style="cursor:pointer;" onclick="openLedgerView('debtors')"><div class="num">${fmt(totalToCollect())}</div><div class="lbl">To Receive (Customer)</div></div>
       <div class="stat"><div class="num">${fmt(stockValue)}</div><div class="lbl">Stock Value</div></div>
+      ` : ''}
       <div class="stat"><div class="num">${db.stock.filter(s=>s.qty>0).length}</div><div class="lbl">Item in Stock</div></div>
-      <div class="stat" style="grid-column:1/3;"><div class="num">${billsToday}</div><div class="lbl">Bill Today (Sale + Purchase)</div></div>
+      <div class="stat"><div class="num">${billsToday}</div><div class="lbl">Bill Today (Sale + Purchase)</div></div>
     </div>
     <div class="card" style="margin-top:12px;"><h3>Alerts</h3>${alerts}</div>
     <div class="card">
@@ -392,6 +486,11 @@ function renderDashboard(){
       </div>
     </div>
     <div class="card">
+      <h3>Quotations</h3>
+      <button class="btn btn-ghost" onclick="setScreen('quotations')">📄 Quotations / Estimates</button>
+    </div>
+    ${isOwner() ? `
+    <div class="card">
       <h3>Ledger</h3>
       <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('debtors')"><div class="li-main">Debtors</div><div class="li-right">→</div></div>
       <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('creditors')"><div class="li-main">Creditors</div><div class="li-right">→</div></div>
@@ -399,6 +498,7 @@ function renderDashboard(){
       <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('cashpurchase')"><div class="li-main">Cash Purchase</div><div class="li-right">→</div></div>
       <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('walkin')"><div class="li-main">Walk-in Customer</div><div class="li-right">→</div></div>
       <button class="btn btn-ghost" style="margin-top:10px;" onclick="setScreen('parties')">+ Add / manage suppliers & customers</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('reminders')">🔔 Payment reminders</button>
     </div>
     <div class="card">
       <h3>More</h3>
@@ -406,13 +506,33 @@ function renderDashboard(){
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('pnl')">📊 Profit &amp; Loss</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('shopSettings')">🏪 Shop details (for invoices)</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('staffList')">👷 Staff Ledger</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('auditLog')">📋 Activity log</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('users')">👥 Users &amp; roles</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="openCategoryManager()">🏷 Manage Category & Sub-category</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="exportBackup()">⬇ Export Backup</button>
       <label class="btn btn-ghost" style="margin-top:8px;display:flex;">
         ⬆ Import Backup
         <input type="file" accept="application/json" style="display:none;" onchange="importBackup(this.files[0])"/>
       </label>
+      ${!CLOUD_MODE ? `<button class="btn btn-danger" style="margin-top:8px;" onclick="switchToStaffMode()">🔒 Switch to Staff mode (device PIN)</button>` : `<button class="btn btn-ghost" style="margin-top:8px;" onclick="doLogout()">Sign out</button>`}
     </div>
+    ` : `
+    <div class="card">
+      <h3>Customer balances</h3>
+      <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('debtors')"><div class="li-main">Customer ledger (who owes us)</div><div class="li-right">→</div></div>
+      <button class="btn btn-ghost" style="margin-top:10px;" onclick="setScreen('reminders')">🔔 Payment reminders</button>
+    </div>
+    <div class="card">
+      <h3>Staff access</h3>
+      ${CLOUD_MODE ? `
+        <div class="step">Signed in as ${currentUserEmail}. Profit, expenses, supplier balances and the activity log are restricted to owner accounts.</div>
+        <button class="btn btn-ghost" onclick="doLogout()">Sign out</button>
+      ` : `
+        <div class="step">Cost prices, profit, expenses and supplier ledgers are hidden. Ask the owner to unlock full access.</div>
+        <button class="btn btn-primary" onclick="switchToOwnerMode()">🔓 Enter owner PIN</button>
+      `}
+    </div>
+    `}
   `;
 }
 
@@ -702,6 +822,7 @@ function savePurchase(){
   const purchaseAmountPaid = purchaseDraft.partyId ? (purchaseDraft.paidInFull!==false ? fullPurchaseTotal : Number(purchaseDraft.amountPaid)||0) : fullPurchaseTotal;
   db.purchases.push({id, billNo, date:todayStr(), supplier:purchaseDraft.supplier||'Unknown supplier', partyId:purchaseDraft.partyId||null, amountPaid:purchaseAmountPaid, gstMode:purchaseDraft.gstMode, items:valid, totalAmount, totalGst, additionalCharges:purchaseDraft.additionalCharges||[], additionalChargesTotal:chargesTotal, actualAmountPaid:actualPaidTotal});
   saveDB(db);
+  logAudit('Purchase created', billNo+' • '+(purchaseDraft.supplier||'Unknown')+' • '+fmt(fullPurchaseTotal));
   purchaseDraft = {supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:''};
   openPrintPreview('purchase', id);
 }
@@ -804,6 +925,7 @@ function savePurchaseReturn(){
   const billNo = nextBillNo('purchase');
   db.purchaseReturns.push({id, billNo, date:todayStr(), items:valid, totalAmount, totalGst, gstMode:purchaseReturnDraft.gstMode});
   saveDB(db);
+  logAudit('Purchase return', billNo+' • '+valid.length+' item(s)');
   purchaseReturnDraft = {gstMode:'excluded', items:[]};
   openPrintPreview('purchaseReturn', id);
 }
@@ -811,6 +933,8 @@ async function savePurchaseReturnCloud(){
   const valid = purchaseReturnDraft.items.filter(it=>Number(it.qty)>0);
   if(!valid.length){ alert('Add at least one item to return.'); return; }
   try{
+    const billNo = await nextBillNoCloud('purchase');
+    const retRef = fsDB.collection('purchaseReturns').doc();
     await fsDB.runTransaction(async (tx)=>{
       const refs = valid.map(it=>fsDB.collection('stock').doc(it.stockId));
       const snaps = await Promise.all(refs.map(r=>tx.get(r)));
@@ -828,8 +952,6 @@ async function savePurchaseReturnCloud(){
         const br = gstBreakdown(amt, Number(it.gst), purchaseReturnDraft.gstMode);
         totalAmount += br.taxable; totalGst += br.gst;
       });
-      const billNo = nextBillNo('purchase');
-      const retRef = fsDB.collection('purchaseReturns').doc();
       tx.set(retRef, {billNo, date:todayStr(), items:valid, totalAmount, totalGst, gstMode:purchaseReturnDraft.gstMode, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     });
     purchaseReturnDraft = {gstMode:'excluded', items:[]};
@@ -973,7 +1095,7 @@ function saveOpeningStock(){
 async function applyOpeningStockItemsCloud(items){
   const valid = items.filter(it=>it.itemName && String(it.itemName).trim() && it.category && Number(it.qty)>0 && Number(it.piecesPerBox)>0 && Number(it.cost)>0);
   if(!valid.length) return valid;
-  valid.forEach(it=>{ if(!it.sku) it.sku = nextSku(it.category); });
+  for(const it of valid){ if(!it.sku) it.sku = await nextSkuCloud(it.category); }
   const CHUNK_SIZE = 40; // stays well under Firestore's per-transaction limits
   for(let start=0; start<valid.length; start+=CHUNK_SIZE){
     const chunk = valid.slice(start, start+CHUNK_SIZE);
@@ -1257,6 +1379,11 @@ function saveSale(){
   const saleAmountPaid = saleDraft.partyId ? (saleDraft.paidInFull!==false ? grandTotal : Number(saleDraft.amountPaid)||0) : grandTotal;
   db.sales.push({id, billNo, date:todayStr(), customer:saleDraft.customer||'Walk-in', partyId:saleDraft.partyId||null, amountPaid:saleAmountPaid, gstMode:saleDraft.gstMode, items:saleDraft.items, totalAmount:grandTotal, totalGst, totalDiscount, additionalCharges:saleDraft.additionalCharges||[], additionalChargesTotal:chargesTotal, billDiscountPct});
   saveDB(db);
+  logAudit('Sale created', billNo+' • '+(saleDraft.customer||'Walk-in')+' • '+fmt(grandTotal));
+  if(saleDraft.fromQuoteId){
+    const q = (db.quotations||[]).find(x=>x.id===saleDraft.fromQuoteId);
+    if(q){ q.status='converted'; q.convertedToBill=billNo; }
+  }
   saleDraft = {customer:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'included', items:[], additionalCharges:[], billDiscount:0};
   openPrintPreview('sale', id);
 }
@@ -1348,6 +1475,7 @@ function saveSaleReturn(){
   const billNo = nextBillNo('sale');
   db.saleReturns.push({id, billNo, date:todayStr(), refSaleId:saleReturnDraft.sale.billNo, items:valid, totalAmount, totalGst});
   saveDB(db);
+  logAudit('Sale return', billNo+' • against '+(saleReturnDraft.sale?saleReturnDraft.sale.billNo:''));
   saleReturnDraft = {sale:null, items:[]};
   openPrintPreview('saleReturn', id);
 }
@@ -1368,7 +1496,7 @@ async function saveSaleReturnCloud(){
         batchWrite.set(stockRef, {qty: firebase.firestore.FieldValue.increment(Number(it.boxQty||0)*it.piecesPerBox + Number(it.pieceQty||0))}, {merge:true});
       }
     });
-    const billNo = nextBillNo('sale');
+    const billNo = await nextBillNoCloud('sale');
     const retRef = fsDB.collection('saleReturns').doc();
     batchWrite.set(retRef, {billNo, date:todayStr(), refSaleId:saleReturnDraft.sale.billNo, items:valid, totalAmount, totalGst, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     await batchWrite.commit();
@@ -1783,30 +1911,71 @@ function getStoredConfig(){ try{ return JSON.parse(localStorage.getItem(FB_CONFI
 function openCloudModal(){
   document.getElementById('genericModalTitle').textContent = 'Connect cloud sync';
   const existing = getStoredConfig();
+  const rules = `rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isOwner() {
+      return signedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    // Everyone signed in can read these; staff can create sales/purchases.
+    match /stock/{doc}          { allow read, write: if signedIn(); }
+    match /sales/{doc}          { allow read, create: if signedIn();
+                                  allow update, delete: if isOwner(); }
+    match /purchases/{doc}      { allow read, create: if signedIn();
+                                  allow update, delete: if isOwner(); }
+    match /saleReturns/{doc}    { allow read, create: if signedIn(); }
+    match /purchaseReturns/{doc}{ allow read, create: if signedIn(); }
+    match /quotations/{doc}     { allow read, write: if signedIn(); }
+    match /openingStock/{doc}   { allow read, write: if signedIn(); }
+    match /parties/{doc}        { allow read: if signedIn();
+                                  allow write: if isOwner(); }
+    match /categories/{doc}     { allow read: if signedIn();
+                                  allow write: if isOwner(); }
+    match /settings/{doc}       { allow read: if signedIn();
+                                  allow write: if isOwner(); }
+    match /meta/{doc}           { allow read, write: if signedIn(); }
+
+    // OWNER ONLY — staff accounts are refused by the server, not just hidden.
+    match /expenses/{doc}    { allow read, write: if isOwner(); }
+    // Staff can read payments (needed for customer balances) but not change them.
+    match /payments/{doc}    { allow read: if signedIn();
+                               allow write: if isOwner(); }
+    match /staff/{doc}       { allow read, write: if isOwner(); }
+    match /staffLedger/{doc} { allow read, write: if isOwner(); }
+    match /auditLog/{doc}    { allow read: if isOwner();
+                               allow create: if signedIn(); }
+
+    // Role list: readable by the signed-in user, writable only by owners.
+    match /users/{uid} { allow read: if signedIn();
+                         allow write: if isOwner(); }
+  }
+}`;
   document.getElementById('genericModalBody').innerHTML = `
-    <div class="step">Connects this app to a free Firebase project so stock, purchases and sales sync live across every phone and computer — no monthly fee for a single shop's volume.</div>
+    <div class="step">Connects this app to a free Firebase project so stock, purchases and sales sync live across every device — with proper per-person logins and server-enforced roles.</div>
     <div class="step">
       <b>One-time setup:</b><br>
       1. console.firebase.google.com → Add project.<br>
       2. Build → Firestore Database → Create database → Standard edition → production mode.<br>
-      3. Build → Authentication → Sign-in method → enable Anonymous.<br>
-      4. Project settings → Your apps → &lt;/&gt; web icon → register app → copy the firebaseConfig object.<br>
-      5. Paste it below.
+      3. Build → Authentication → Sign-in method → enable <b>Email/Password</b>.<br>
+      4. Authentication → Users → <b>Add user</b> (your own email + password). Copy the <b>User UID</b>.<br>
+      5. Firestore → Data → Start collection <b>users</b> → Document ID = that UID → add field <b>role</b> = <b>owner</b>.<br>
+      6. Project settings → Your apps → &lt;/&gt; web icon → register app → copy the firebaseConfig.<br>
+      7. Paste it below, then paste the rules further down into the Rules tab.
     </div>
     <div class="field"><label>Paste firebaseConfig here</label>
       <textarea id="fbConfigInput" style="width:100%;min-height:110px;padding:10px;border-radius:9px;border:1.5px solid var(--line);font-family:monospace;font-size:12px;" placeholder='{ "apiKey": "...", ... }'>${existing ? JSON.stringify(existing,null,2) : ''}</textarea>
     </div>
     <button class="btn btn-primary" onclick="connectCloud()">Connect</button>
     ${existing ? `<button class="btn btn-danger" style="margin-top:8px;" onclick="disconnectCloud()">Disconnect & go back to local only</button>` : ''}
-    <div class="step" style="margin-top:10px;"><b>Firestore rules to paste</b> (Rules tab):<br>
-    <textarea readonly style="width:100%;min-height:80px;padding:10px;border-radius:9px;border:1.5px solid var(--line);font-family:monospace;font-size:11px;">rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}</textarea></div>
+    <div class="step" style="margin-top:10px;"><b>Firestore rules — paste ALL of this</b> into Firestore → Rules → Publish:<br>
+    <textarea readonly style="width:100%;min-height:220px;padding:10px;border-radius:9px;border:1.5px solid var(--line);font-family:monospace;font-size:10px;">${rules}</textarea></div>
+    <div class="step"><b>Important:</b> without step 5 (setting your own role to "owner"), you'll be treated as staff and locked out of your own reports.</div>
   `;
   document.getElementById('genericModal').style.display='flex';
 }
@@ -1839,12 +2008,19 @@ function showCloudConnectError(message){
     <div class="card">
       <h3>Couldn't connect to cloud sync</h3>
       <div class="step">${message}</div>
-      <div class="step">Check: Firestore rules published, Anonymous sign-in enabled, config pasted exactly.</div>
+      <div class="step">Check: Firestore rules published, Email/Password sign-in enabled, your user role set to "owner" in the users collection, config pasted exactly.</div>
       <button class="btn btn-primary" onclick="location.reload()">Retry</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="disconnectCloud()">Go back to local only</button>
     </div>
   `;
 }
+
+/* Server-enforced role. Unlike the device PIN, this comes from the database
+   and is backed by Firestore security rules — a staff account simply cannot
+   fetch owner-only data, no matter what they do in the browser. */
+let serverRole = null;   // 'owner' | 'staff' | null (not signed in)
+let currentUserEmail = '';
+function isServerOwner(){ return serverRole === 'owner'; }
 
 function initCloudIfConfigured(){
   const cfg = getStoredConfig();
@@ -1858,34 +2034,92 @@ function initCloudIfConfigured(){
     showCloudConnectError('Firebase could not start: '+e.message);
     return false;
   }
-  firebase.auth().signInAnonymously().catch(err=>{
-    console.error('Sign-in failed', err);
-    showCloudConnectError('Sign-in failed: '+err.code+' — '+err.message);
+  firebase.auth().onAuthStateChanged(async user=>{
+    if(user){
+      currentUserEmail = user.email || '';
+      try{
+        const roleDoc = await fsDB.collection('users').doc(user.uid).get();
+        serverRole = roleDoc.exists ? (roleDoc.data().role || 'staff') : 'staff';
+      }catch(e){
+        console.error('Could not read role', e);
+        serverRole = 'staff'; // fail closed — least privilege if role can't be read
+      }
+      CLOUD_MODE = true;
+      updateCloudBadge();
+      attachCloudListeners();
+      setScreen('dashboard');
+    } else {
+      CLOUD_MODE = false;
+      serverRole = null;
+      updateCloudBadge();
+      showLoginScreen();
+    }
   });
-  firebase.auth().onAuthStateChanged(user=>{
-    if(user){ CLOUD_MODE = true; updateCloudBadge(); attachCloudListeners(); }
-  });
-  setTimeout(()=>{ if(!CLOUD_MODE) showCloudConnectError('Still not connected after 12 seconds.'); }, 12000);
   return true;
 }
+
+function showLoginScreen(){
+  const main = document.getElementById('main');
+  if(!main) return;
+  main.innerHTML = `
+    <div class="card">
+      <h3>Sign in</h3>
+      <div class="step">Each person has their own login. Owners see everything; staff see stock, sales and purchases but not profit, expenses or ledgers.</div>
+      <div class="field"><label>Email</label><input id="loginEmail" type="email" autocomplete="username"/></div>
+      <div class="field"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password"/></div>
+      <button class="btn btn-primary" onclick="doLogin()">Sign in</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="doPasswordReset()">Forgot password?</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="disconnectCloud()">Use local-only mode instead</button>
+    </div>
+  `;
+}
+function doLogin(){
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  if(!email || !password){ alert('Enter email and password.'); return; }
+  firebase.auth().signInWithEmailAndPassword(email, password)
+    .catch(e=>alert('Sign-in failed: '+e.message));
+}
+function doPasswordReset(){
+  const email = document.getElementById('loginEmail').value.trim();
+  if(!email){ alert('Enter your email address first, then tap this again.'); return; }
+  firebase.auth().sendPasswordResetEmail(email)
+    .then(()=>alert('Password reset link sent to '+email))
+    .catch(e=>alert('Could not send reset: '+e.message));
+}
+function doLogout(){
+  if(!confirm('Sign out of this device?')) return;
+  firebase.auth().signOut();
+}
+window.doLogin = doLogin;
+window.doPasswordReset = doPasswordReset;
+window.doLogout = doLogout;
 function safeRender(){
   try{ render(); }
   catch(e){ console.error('Render error:', e); showCloudConnectError('A display error happened: '+e.message); }
 }
 function attachCloudListeners(){
+  // Collections everyone (owner + staff) can read
   fsDB.collection('stock').onSnapshot(snap=>{ db.stock = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (stock): '+err.code+' — '+err.message); });
-  fsDB.collection('purchases').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.purchases = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (purchases): '+err.code+' — '+err.message); });
-  fsDB.collection('sales').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.sales = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (sales): '+err.code+' — '+err.message); });
-  fsDB.collection('parties').onSnapshot(snap=>{ db.parties = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (parties): '+err.code+' — '+err.message); });
-  fsDB.collection('payments').onSnapshot(snap=>{ db.payments = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (payments): '+err.code+' — '+err.message); });
-  fsDB.collection('purchaseReturns').onSnapshot(snap=>{ db.purchaseReturns = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (purchaseReturns): '+err.code+' — '+err.message); });
-  fsDB.collection('saleReturns').onSnapshot(snap=>{ db.saleReturns = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (saleReturns): '+err.code+' — '+err.message); });
-  fsDB.collection('expenses').onSnapshot(snap=>{ db.expenses = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (expenses): '+err.code+' — '+err.message); });
-  fsDB.collection('staff').onSnapshot(snap=>{ db.staff = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (staff): '+err.code+' — '+err.message); });
-  fsDB.collection('staffLedger').onSnapshot(snap=>{ db.staffLedger = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (staffLedger): '+err.code+' — '+err.message); });
-  fsDB.collection('openingStock').onSnapshot(snap=>{ db.openingStock = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (openingStock): '+err.code+' — '+err.message); });
-  fsDB.collection('settings').doc('shopInfo').onSnapshot(snap=>{ if(snap.exists) db.shopInfo = snap.data(); safeRender(); }, err=>console.error(err));
-  fsDB.collection('categories').doc('main').onSnapshot(snap=>{ if(snap.exists) db.categories = snap.data().data || defaultCategories(); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (categories): '+err.code+' — '+err.message); });
+  fsDB.collection('purchases').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.purchases = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('purchases', err));
+  fsDB.collection('sales').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.sales = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('sales', err));
+  fsDB.collection('purchaseReturns').onSnapshot(snap=>{ db.purchaseReturns = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('purchaseReturns', err));
+  fsDB.collection('saleReturns').onSnapshot(snap=>{ db.saleReturns = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('saleReturns', err));
+  fsDB.collection('openingStock').onSnapshot(snap=>{ db.openingStock = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('openingStock', err));
+  fsDB.collection('quotations').onSnapshot(snap=>{ db.quotations = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('quotations', err));
+  fsDB.collection('categories').doc('main').onSnapshot(snap=>{ if(snap.exists) db.categories = snap.data().data || defaultCategories(); safeRender(); }, err=>console.error('categories', err));
+  fsDB.collection('settings').doc('shopInfo').onSnapshot(snap=>{ if(snap.exists) db.shopInfo = snap.data(); safeRender(); }, err=>console.error('shopInfo', err));
+  fsDB.collection('parties').onSnapshot(snap=>{ db.parties = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('parties', err));
+  // Staff need payments to compute customer outstanding balances correctly.
+  fsDB.collection('payments').onSnapshot(snap=>{ db.payments = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('payments', err));
+
+  // Owner-only collections. Staff accounts are blocked server-side by the
+  // Firestore rules, so we don't even subscribe — avoids noisy permission errors.
+  if(!isServerOwner()) return;
+  fsDB.collection('expenses').onSnapshot(snap=>{ db.expenses = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('expenses', err));
+  fsDB.collection('staff').onSnapshot(snap=>{ db.staff = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('staff', err));
+  fsDB.collection('staffLedger').onSnapshot(snap=>{ db.staffLedger = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('staffLedger', err));
+  fsDB.collection('auditLog').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.auditLog = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('auditLog', err));
 }
 window.openCloudModal = openCloudModal;
 window.connectCloud = connectCloud;
@@ -1895,7 +2129,7 @@ async function savePurchaseCloud(){
   const valid = purchaseDraft.items.filter(it=>it.itemName.trim() && it.category && Number(it.qty)>0 && Number(it.piecesPerBox)>0);
   if(!valid.length){ alert('Add at least one item with a name, category, pieces-per-box and quantity.'); return; }
   try{
-    valid.forEach(it=>{ if(!it.sku) it.sku = nextSku(it.category); });
+    for(const it of valid){ if(!it.sku) it.sku = await nextSkuCloud(it.category); }
     const lineAmounts = valid.map(it=>Number(it.qty)*Number(it.rate));
     const lineTaxables = valid.map((it,i)=>gstBreakdown(lineAmounts[i], Number(it.gst), purchaseDraft.gstMode).taxable);
     const billedTaxableTotal = lineTaxables.reduce((a,v)=>a+v,0);
@@ -1911,6 +2145,7 @@ async function savePurchaseCloud(){
       ? Number(purchaseDraft.actualAmountPaid) : (billedGrandTotal+chargesTotal);
     const underBillingGap = Math.max(0, actualPaidTotal - (billedGrandTotal+chargesTotal));
 
+    const billNo = await nextBillNoCloud('purchase');
     await fsDB.runTransaction(async (tx)=>{
       const refs = valid.map(it=>fsDB.collection('stock').doc(it.sku));
       const snaps = await Promise.all(refs.map(r=>tx.get(r)));
@@ -1931,7 +2166,6 @@ async function savePurchaseCloud(){
           qty: newQty
         }, {merge:true});
       });
-      const billNo = nextBillNo('purchase');
       const purchaseRef = fsDB.collection('purchases').doc();
       const fullPurchaseTotal = billedGrandTotal+chargesTotal;
       const purchaseAmountPaid = purchaseDraft.partyId ? (purchaseDraft.paidInFull!==false ? fullPurchaseTotal : Number(purchaseDraft.amountPaid)||0) : fullPurchaseTotal;
@@ -1942,6 +2176,7 @@ async function savePurchaseCloud(){
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
     });
+    logAudit('Purchase created', billNo+' • '+(purchaseDraft.supplier||'Unknown'));
     purchaseDraft = {supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:''};
     openPrintPreview('purchase', purchaseRef.id);
   }catch(e){ console.error(e); alert('Could not save: '+e.message); }
@@ -1949,6 +2184,7 @@ async function savePurchaseCloud(){
 async function saveSaleCloud(){
   const saleRefHolder = {ref:null};
   try{
+    const billNo = await nextBillNoCloud('sale');
     await fsDB.runTransaction(async (tx)=>{
       const refs = saleDraft.items.map(it=>fsDB.collection('stock').doc(it.stockId));
       const snaps = await Promise.all(refs.map(r=>tx.get(r)));
@@ -1970,7 +2206,6 @@ async function saveSaleCloud(){
         const br = gstBreakdown(net, Number(it.gst), saleDraft.gstMode);
         totalAmount += br.total; totalGst += br.gst; totalDiscount += disc;
       });
-      const billNo = nextBillNo('sale');
       const saleRef = fsDB.collection('sales').doc();
       saleRefHolder.ref = saleRef;
       const billDiscountPct = Number(saleDraft.billDiscount)||0;
@@ -1988,6 +2223,10 @@ async function saveSaleCloud(){
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
     });
+    logAudit('Sale created', billNo+' • '+(saleDraft.customer||'Walk-in'));
+    if(saleDraft.fromQuoteId){
+      fsDB.collection('quotations').doc(saleDraft.fromQuoteId).update({status:'converted', convertedToBill:billNo}).catch(e=>console.error(e));
+    }
     saleDraft = {customer:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'included', items:[], additionalCharges:[], billDiscount:0};
     openPrintPreview('sale', saleRefHolder.ref.id);
   }catch(e){ console.error(e); alert(e.message); }
@@ -2088,6 +2327,10 @@ function renderPartyDetail(){
   const party = db.parties.find(p=>p.id===openPartyId);
   if(!party) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('parties')">← Back</button>`;
   const isSupplier = party.type==='supplier';
+  if(!isOwner() && isSupplier){
+    return `<button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back</button>
+      <div class="card"><h3>Not available</h3><div class="step">Supplier ledgers are restricted to owner accounts.</div></div>`;
+  }
   const bal = partyBalance(party.id);
   const bills = isSupplier
     ? db.purchases.filter(p=>p.partyId===party.id).map(p=>({id:p.id, type:'purchase', billNo:p.billNo, date:p.date, amt:p.totalAmount+p.totalGst+(p.additionalChargesTotal||0), paid:p.amountPaid}))
@@ -2186,6 +2429,11 @@ let ledgerViewKind = null;
 function openLedgerView(kind){ ledgerViewKind = kind; goTo('ledgerView'); }
 function renderLedgerView(){
   const kind = ledgerViewKind;
+  // Staff are allowed the customer ledger only — everything else is owner-only.
+  if(!isOwner() && kind!=='debtors'){
+    return `<button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back</button>
+      <div class="card"><h3>Not available</h3><div class="step">This view is restricted to owner accounts.</div></div>`;
+  }
   const titleMap = {debtors:'Debtors (they owe you)', creditors:'Creditors (you owe them)', cashsale:'Cash Sale', cashpurchase:'Cash Purchase', walkin:'Walk-in Customer'};
   let body = '';
 
@@ -2664,6 +2912,288 @@ function renderPnL(){
 }
 
 /* ===================== SHOP SETTINGS ===================== */
+/* ===================== QUOTATIONS / ESTIMATES ===================== */
+let quoteDraft = { customer:'', phone:'', gstMode:'included', items:[], validDays:15, notes:'' };
+let quoteView = 'list';
+
+function renderQuotations(){
+  if(quoteView==='new') return renderQuoteForm();
+  const quotes = (db.quotations||[]).slice().sort((a,b)=> a.date<b.date?1:-1);
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
+    <button class="btn btn-primary" style="margin-bottom:10px;" onclick="quoteView='new';quoteDraft={customer:'',phone:'',gstMode:'included',items:[],validDays:15,notes:''};render()">+ New quotation</button>
+    <div class="card">
+      <h3>Quotations (${quotes.length})</h3>
+      ${quotes.length ? quotes.map(q=>`
+        <div class="list-row">
+          <div style="flex:1;cursor:pointer;" onclick="openPrintPreview('quotation','${q.id}')">
+            <div class="li-main">${q.quoteNo} ${q.status==='converted'?'<span class="tag ok">Converted</span>':''}</div>
+            <div class="li-sub">${q.date} • ${q.customer||'Walk-in'} • valid ${q.validDays||15} days</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div class="li-right">${fmt(q.total||0)}</div>
+            ${q.status!=='converted' ? `<button class="btn btn-primary btn-sm" onclick="convertQuoteToSale('${q.id}')">→ Bill</button>` : ''}
+          </div>
+        </div>
+      `).join('') : `<div class="empty">No quotations yet.</div>`}
+    </div>
+  `;
+}
+function renderQuoteForm(){
+  const itemsHtml = quoteDraft.items.map((it,idx)=>{
+    const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
+    const disc = gross*Number(it.discount||0)/100;
+    return `
+    <div class="item-row-card">
+      <button class="rm" onclick="removeQuoteItem(${idx})">×</button>
+      <div class="li-main">${it.itemName} <span style="color:var(--ink-500);font-weight:500;">(${it.batch||'—'})</span></div>
+      <div class="row2" style="margin-top:6px;">
+        <div class="field"><label>Boxes</label><input type="number" value="${it.boxQty||''}" placeholder="0" onchange="updateQuoteItem(${idx},'boxQty',this.value)"/></div>
+        <div class="field"><label>Loose pieces</label><input type="number" value="${it.pieceQty||''}" placeholder="0" onchange="updateQuoteItem(${idx},'pieceQty',this.value)"/></div>
+      </div>
+      <div class="field"><label>Discount %</label><input type="number" value="${it.discount||''}" placeholder="0" onchange="updateQuoteItem(${idx},'discount',this.value)"/></div>
+      <div style="font-size:12px;color:var(--ink-500);">Line total <b>${fmt(gross-disc)}</b></div>
+    </div>`;
+  }).join('');
+  const total = quoteDraft.items.reduce((a,it)=>{
+    const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
+    return a + (gross - gross*Number(it.discount||0)/100);
+  },0);
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="quoteView='list';render()">← Back to quotations</button>
+    <div class="card">
+      <h3>Customer</h3>
+      <div class="row2">
+        <div class="field"><label>Name</label><input value="${quoteDraft.customer}" oninput="quoteDraft.customer=this.value"/></div>
+        <div class="field"><label>Phone (optional)</label><input value="${quoteDraft.phone}" oninput="quoteDraft.phone=this.value"/></div>
+      </div>
+      <div class="field"><label>Valid for (days)</label><input type="number" value="${quoteDraft.validDays}" oninput="quoteDraft.validDays=Number(this.value)"/></div>
+    </div>
+    <div class="card">
+      <h3>Add item</h3>
+      <div class="field"><label>Search stock item</label><input id="quoteSearch" placeholder="Type product name..." oninput="renderQuoteSearchResults(this.value)"/></div>
+      <div id="quoteSearchResults"></div>
+    </div>
+    <div class="card">
+      <h3>Items</h3>
+      ${itemsHtml || `<div class="empty">No items added yet.</div>`}
+    </div>
+    <div class="card">
+      <h3>Notes (optional)</h3>
+      <div class="field"><input value="${quoteDraft.notes}" oninput="quoteDraft.notes=this.value" placeholder="e.g. delivery in 3 days"/></div>
+    </div>
+    ${quoteDraft.items.length ? `
+    <div class="card">
+      <div class="total-line grand"><span>Estimate total</span><span>${fmt(total)}</span></div>
+    </div>
+    <button class="btn btn-primary" onclick="saveQuotation()">Save quotation</button>
+    ` : ''}
+  `;
+}
+function renderQuoteSearchResults(q){
+  const box = document.getElementById('quoteSearchResults');
+  const query = (q||'').trim().toLowerCase();
+  if(!query){ box.innerHTML=''; return; }
+  const matches = db.stock.filter(s=>s.qty>0 && s.itemName.toLowerCase().includes(query)).slice(0,20);
+  if(!matches.length){ box.innerHTML = `<div class="empty" style="padding:14px;">No matching stock found.</div>`; return; }
+  box.innerHTML = matches.map(s=>`
+    <div class="list-row" style="cursor:pointer;" onclick="addQuoteItem('${s.id}')">
+      <div><div class="li-main">${s.itemName}</div><div class="li-sub">${Math.floor(s.qty/(s.piecesPerBox||1))} boxes available</div></div>
+      <div class="li-right" style="color:var(--clay-700);">Add +</div>
+    </div>
+  `).join('');
+}
+function addQuoteItem(stockId){
+  const s = db.stock.find(x=>x.id===stockId);
+  if(!s) return;
+  const ppb = s.piecesPerBox||1;
+  quoteDraft.items.push({stockId:s.id, itemName:s.itemName, batch:s.batch, piecesPerBox:ppb,
+    boxPrice:s.mrp, piecePrice:s.mrp/ppb, boxQty:1, pieceQty:0, discount:0, gst:s.gst});
+  document.getElementById('quoteSearch').value='';
+  render();
+}
+function removeQuoteItem(idx){ quoteDraft.items.splice(idx,1); render(); }
+function updateQuoteItem(idx,field,val){ quoteDraft.items[idx][field]=Number(val); render(); }
+function saveQuotation(){
+  if(!quoteDraft.items.length){ alert('Add at least one item.'); return; }
+  const total = quoteDraft.items.reduce((a,it)=>{
+    const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
+    return a + (gross - gross*Number(it.discount||0)/100);
+  },0);
+  const record = {
+    date: todayStr(), customer: quoteDraft.customer||'Walk-in', phone: quoteDraft.phone||'',
+    gstMode: quoteDraft.gstMode, items: quoteDraft.items, total, validDays: quoteDraft.validDays||15,
+    notes: quoteDraft.notes||'', status:'open'
+  };
+  if(CLOUD_MODE){
+    nextBillNoCloud('quote').then(quoteNo=>{
+      return fsDB.collection('quotations').add(Object.assign({}, record, {quoteNo, createdAt:firebase.firestore.FieldValue.serverTimestamp()}));
+    }).then(ref=>{
+      logAudit('Quotation created', record.customer+' • '+fmt(total));
+      quoteDraft = {customer:'',phone:'',gstMode:'included',items:[],validDays:15,notes:''};
+      quoteView='list';
+      openPrintPreview('quotation', ref.id);
+    }).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    record.id = nextId('QT');
+    record.quoteNo = 'HWQ'+String((db.quotations||[]).length+1).padStart(5,'0');
+    if(!db.quotations) db.quotations=[];
+    db.quotations.push(record);
+    saveDB(db);
+    logAudit('Quotation created', record.customer+' • '+fmt(total));
+    quoteDraft = {customer:'',phone:'',gstMode:'included',items:[],validDays:15,notes:''};
+    quoteView='list';
+    openPrintPreview('quotation', record.id);
+  }
+}
+function convertQuoteToSale(quoteId){
+  const q = (db.quotations||[]).find(x=>x.id===quoteId);
+  if(!q){ alert('Quotation not found.'); return; }
+  if(!confirm('Convert '+q.quoteNo+' into a sale bill? It will open in the Sale screen for you to confirm.')) return;
+  saleDraft = {
+    customer: q.customer||'', partyId:null, paidInFull:true, amountPaid:0,
+    gstMode: q.gstMode||'included', items: JSON.parse(JSON.stringify(q.items)),
+    additionalCharges:[], billDiscount:0, fromQuoteId: quoteId
+  };
+  saleScreenMode = 'new';
+  setScreen('sales');
+}
+window.renderQuoteSearchResults = renderQuoteSearchResults;
+window.addQuoteItem = addQuoteItem;
+window.removeQuoteItem = removeQuoteItem;
+window.updateQuoteItem = updateQuoteItem;
+window.saveQuotation = saveQuotation;
+window.convertQuoteToSale = convertQuoteToSale;
+
+/* ===================== PAYMENT REMINDERS ===================== */
+function renderReminders(){
+  const debtors = db.parties.filter(p=>p.type==='customer' && partyBalance(p.id)>0)
+    .map(p=>({party:p, bal:partyBalance(p.id)}))
+    .sort((a,b)=>b.bal-a.bal);
+  const totalDue = debtors.reduce((a,d)=>a+d.bal,0);
+  const sample = debtors.length ? buildReminderMessage(debtors[0].party, debtors[0].bal, reminderLang) : '';
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${fmt(totalDue)}</div><div class="lbl">Total outstanding</div></div>
+      <div class="stat"><div class="num">${debtors.length}</div><div class="lbl">Customers owing</div></div>
+    </div>
+    <div class="card">
+      <h3>Message language</h3>
+      <div class="segment">
+        <button class="${reminderLang==='en'?'active':''}" onclick="setReminderLang('en')">English</button>
+        <button class="${reminderLang==='bn'?'active':''}" onclick="setReminderLang('bn')">বাংলা</button>
+      </div>
+      ${sample ? `<div class="step"><b>Preview (for ${debtors[0].party.name}):</b></div>
+      <div class="step" style="white-space:pre-wrap;background:var(--stone-200);padding:10px;border-radius:9px;">${sample}</div>` : ''}
+    </div>
+    <div class="card">
+      <h3>Customers with pending balance</h3>
+      <div class="step">Tap "Remind" to open WhatsApp with the message ready. You review it before sending — nothing is sent automatically.</div>
+      ${debtors.length ? debtors.map(d=>`
+        <div class="list-row">
+          <div style="flex:1;cursor:pointer;" onclick="openPartyDetail('${d.party.id}')"><div class="li-main">${d.party.name}</div><div class="li-sub">${d.party.phone||'No phone on file'}</div></div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div class="li-right" style="color:var(--red-700);">${fmt(d.bal)}</div>
+            ${d.party.phone ? `<button class="btn btn-primary btn-sm" onclick="sendReminder('${d.party.id}')">Remind</button>` : ''}
+          </div>
+        </div>
+      `).join('') : `<div class="empty">No outstanding customer balances.</div>`}
+    </div>
+  `;
+}
+let reminderLang = localStorage.getItem('hw_reminder_lang') || 'en';
+function setReminderLang(lang){ reminderLang = lang; localStorage.setItem('hw_reminder_lang', lang); render(); }
+function buildReminderMessage(p, bal, lang){
+  const shop = db.shopInfo||{};
+  const shopName = shop.name||'Hammad World';
+  if(lang==='bn'){
+    return `প্রিয় ${p.name},\n\nআপনাকে বিনীতভাবে জানানো যাচ্ছে যে ${shopName}-এ আপনার হিসাবে ${fmt(bal)} টাকা বকেয়া রয়েছে।\n\nঅনুগ্রহ করে সুবিধামতো সময়ে পরিশোধ করার ব্যবস্থা করবেন।\n\nধন্যবাদ,\n${shopName}${shop.phone?'\n'+shop.phone:''}`;
+  }
+  return `Dear ${p.name},\n\nThis is a gentle reminder that an amount of ${fmt(bal)} is pending against your account with ${shopName}.\n\nKindly arrange the payment at your convenience.\n\nThank you,\n${shopName}${shop.phone?'\n'+shop.phone:''}`;
+}
+function sendReminder(partyId){
+  const p = db.parties.find(x=>x.id===partyId);
+  if(!p || !p.phone) return;
+  const bal = partyBalance(partyId);
+  const msg = buildReminderMessage(p, bal, reminderLang);
+  const phone = p.phone.replace(/[^0-9]/g,'');
+  const withCountry = phone.length===10 ? '91'+phone : phone;
+  logAudit('Payment reminder opened', p.name+' • '+fmt(bal));
+  window.open('https://wa.me/'+withCountry+'?text='+encodeURIComponent(msg), '_blank');
+}
+window.sendReminder = sendReminder;
+window.setReminderLang = setReminderLang;
+
+/* ===================== AUDIT LOG ===================== */
+function renderAuditLog(){
+  const entries = (db.auditLog||[]).slice().sort((a,b)=> (a.at||'')<(b.at||'') ? 1 : -1).slice(0,300);
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
+    <div class="card">
+      <h3>Recent activity (${entries.length})</h3>
+      <div class="step">Records who created or changed what. Useful for spotting mistakes or checking staff activity.</div>
+      ${entries.length ? entries.map(e=>{
+        const when = e.at ? new Date(e.at).toLocaleString('en-IN') : '';
+        return `<div class="list-row"><div><div class="li-main">${e.action}</div><div class="li-sub">${when} • ${e.role||'—'}${e.detail?' • '+e.detail:''}</div></div></div>`;
+      }).join('') : `<div class="empty">No activity recorded yet.</div>`}
+    </div>
+  `;
+}
+
+/* ===================== USERS & ROLES ===================== */
+function renderUsers(){
+  if(!CLOUD_MODE){
+    return `
+      <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back</button>
+      <div class="card"><h3>Users &amp; roles</h3>
+        <div class="step">This needs cloud sync turned on — roles are stored in the database and enforced by the server. In local-only mode, use the Owner PIN instead.</div>
+      </div>`;
+  }
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
+    <div class="card">
+      <h3>Signed in as</h3>
+      <div class="step">${currentUserEmail} • role: <b>${serverRole||'unknown'}</b></div>
+      <button class="btn btn-ghost" onclick="doLogout()">Sign out</button>
+    </div>
+    <div class="card">
+      <h3>Add or change a user's role</h3>
+      <div class="step">
+        <b>Step 1 — create the login:</b> In Firebase Console → Authentication → Users → "Add user", enter their email and a password. Copy the <b>User UID</b> it shows.<br><br>
+        <b>Step 2 — set their role below</b> using that UID.
+      </div>
+      <div class="field"><label>User UID (from Firebase Console)</label><input id="newUserUid" placeholder="e.g. a1B2c3D4..."/></div>
+      <div class="row2">
+        <div class="field"><label>Name (for your reference)</label><input id="newUserName"/></div>
+        <div class="field"><label>Role</label>
+          <select id="newUserRole">
+            <option value="staff">Staff</option>
+            <option value="owner">Owner</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="saveUserRole()">Save role</button>
+    </div>
+    <div class="card">
+      <h3>What staff can and cannot see</h3>
+      <div class="step"><b>Staff CAN:</b> view stock, create sales, create purchases, create quotations, view parties.</div>
+      <div class="step"><b>Staff CANNOT:</b> open Profit &amp; Loss, Expenses, Staff Ledger, payment/ledger balances, Payment Reminders, or the Activity Log — these are blocked by the server, not just hidden.</div>
+      <div class="step"><b>Known limit:</b> because staff create purchases, they can see individual purchase rates on bills they work with. What's protected is the aggregate picture — profit, margins, expenses and balances.</div>
+    </div>
+  `;
+}
+function saveUserRole(){
+  const uid = document.getElementById('newUserUid').value.trim();
+  const name = document.getElementById('newUserName').value.trim();
+  const role = document.getElementById('newUserRole').value;
+  if(!uid){ alert('Enter the User UID from Firebase Console.'); return; }
+  fsDB.collection('users').doc(uid).set({name, role})
+    .then(()=>{ logAudit('User role set', (name||uid)+' → '+role); alert('Role saved.'); })
+    .catch(e=>alert('Could not save: '+e.message));
+}
+window.saveUserRole = saveUserRole;
+
 function renderShopSettings(){
   const s = db.shopInfo || {name:'Hammad World', gstin:'', address:'', phone:''};
   return `
@@ -2676,6 +3206,13 @@ function renderShopSettings(){
       <div class="field"><label>Address</label><input id="shopAddress" value="${s.address||''}"/></div>
       <div class="field"><label>Phone (optional)</label><input id="shopPhone" value="${s.phone||''}"/></div>
       <button class="btn btn-primary" onclick="saveShopInfo()">Save</button>
+    </div>
+    <div class="card">
+      <h3>Owner PIN</h3>
+      <div class="step">Set a PIN so you can switch the app into Staff mode — which hides cost prices, profit, expenses and ledgers. You'll need this PIN to switch back.</div>
+      <div class="step"><b>Be realistic about what this protects:</b> it stops casual viewing by staff on the shop device. It is not bank-grade security — someone technical could work around it in a browser.</div>
+      <div class="field"><label>PIN (4+ digits)</label><input id="ownerPin" type="number" value="${getOwnerPin()}" placeholder="e.g. 1234"/></div>
+      <button class="btn btn-ghost" onclick="saveOwnerPin()">Save PIN</button>
     </div>
   `;
 }
@@ -2695,6 +3232,13 @@ function saveShopInfo(){
   alert('Shop details saved.');
   setScreen('dashboard');
 }
+function saveOwnerPin(){
+  const pin = document.getElementById('ownerPin').value.trim();
+  if(pin && pin.length<4){ alert('Use at least 4 digits.'); return; }
+  localStorage.setItem(OWNER_PIN_KEY, pin);
+  alert(pin ? 'Owner PIN saved on this device.' : 'Owner PIN cleared.');
+}
+window.saveOwnerPin = saveOwnerPin;
 window.saveShopInfo = saveShopInfo;
 
 /* ===================== PRINTABLE DOCUMENTS ===================== */
@@ -2714,8 +3258,10 @@ function renderPrintPreview(){
   else if(type==='sale'){ record = db.sales.find(s=>s.id===id); docTitle='Sale Bill'; refLine='Customer: '+(record?record.customer:''); }
   else if(type==='purchaseReturn'){ record = db.purchaseReturns.find(r=>r.id===id); docTitle='Purchase Return / Debit Note'; refLine='Return to distributor'; }
   else if(type==='saleReturn'){ record = db.saleReturns.find(r=>r.id===id); docTitle='Sale Return / Credit Note'; refLine='Against bill: '+(record?record.refSaleId:''); }
+  else if(type==='quotation'){ record = (db.quotations||[]).find(q=>q.id===id); docTitle='Quotation / Estimate'; refLine='For: '+(record?record.customer:'')+(record&&record.validDays?' • Valid '+record.validDays+' days':''); }
   if(!record) return `<div class="empty">Document not found.</div><button class="btn btn-ghost" onclick="closePrintPreview()">← Back</button>`;
 
+  const isQuotation = (type==='quotation');
   const isPurchaseSide = (type==='purchase' || type==='purchaseReturn');
   const items = record.items||[];
   const rows = items.map(it=>{
@@ -2731,10 +3277,10 @@ function renderPrintPreview(){
     }
   }).join('');
 
-  const taxable = record.totalAmount||0;
-  const gstAmt = record.totalGst||0;
+  const taxable = isQuotation ? (record.total||0) : (record.totalAmount||0);
+  const gstAmt = isQuotation ? 0 : (record.totalGst||0);
   const charges = record.additionalChargesTotal||0;
-  const inclusive = (type==='sale' || type==='saleReturn');
+  const inclusive = (type==='sale' || type==='saleReturn' || isQuotation);
   const grand = inclusive ? taxable+charges : taxable+gstAmt+charges;
   const taxableDisplay = inclusive ? taxable-gstAmt : taxable;
 
@@ -2748,7 +3294,7 @@ function renderPrintPreview(){
           <div style="display:inline-block;margin-top:10px;font-size:12.5px;font-weight:700;background:var(--stone-200);padding:4px 12px;border-radius:20px;color:var(--clay-700);">${docTitle}</div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-500);margin-bottom:10px;border-bottom:1px dashed var(--line);padding-bottom:10px;">
-          <span>Doc no: <b style="color:var(--ink-900);">${record.billNo||record.id}</b></span>
+          <span>Doc no: <b style="color:var(--ink-900);">${record.billNo||record.quoteNo||record.id}</b></span>
           <span>Date: <b style="color:var(--ink-900);">${record.date}</b></span>
         </div>
         <div class="step" style="margin-bottom:10px;">${refLine}</div>
