@@ -428,6 +428,12 @@ function goTo(name, note){
 
 function render(){
   const main = document.getElementById('main');
+  // Cloud is configured but nobody is signed in — the login form is the only
+  // valid screen, otherwise nav taps would show blank/stale data.
+  if(!CLOUD_MODE && getStoredConfig() && typeof firebase!=='undefined' && firebase.auth && !firebase.auth().currentUser){
+    showLoginScreen();
+    return;
+  }
   if(currentScreen==='stockDetail'){ main.innerHTML = renderStockDetail(); return; }
   if(currentScreen==='billDetail'){ main.innerHTML = renderBillDetail(); return; }
   if(currentScreen==='parties'){ main.innerHTML = renderPartiesList(); return; }
@@ -1893,11 +1899,13 @@ function renderReports(){
       <h3>${periodLabel} purchase returns (${purchaseReturns.length})</h3>
       ${purchaseReturns.length ? purchaseReturns.map(r=>`<div class="list-row"><div><div class="li-main">${r.billNo}</div><div class="li-sub">${r.date} • ${r.items.length} item(s)</div></div><div class="li-right">${fmt((r.totalAmount||0)+(r.totalGst||0))}</div></div>`).join('') : `<div class="empty">No purchase returns recorded.</div>`}
     </div>
+    ${isOwner() ? `
     <div class="card">
       <h3>${periodLabel} expenses (${fmt(expenseTotal)})</h3>
       ${Object.keys(expenseByCategory).length ? Object.keys(expenseByCategory).map(c=>`<div class="list-row"><div class="li-main">${c}</div><div class="li-right">${fmt(expenseByCategory[c])}</div></div>`).join('') : `<div class="empty">No expenses in this period.</div>`}
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('expenses')">View full expense tracker →</button>
     </div>
+    ` : ''}
   `;
 }
 
@@ -1995,8 +2003,11 @@ function disconnectCloud(){
 function updateCloudBadge(){
   const el = document.getElementById('cloudBadge');
   if(!el) return;
+  const hasConfig = !!getStoredConfig();
   if(CLOUD_MODE && !navigator.onLine){ el.textContent='Offline — will sync'; el.classList.remove('on'); el.classList.add('offline'); }
-  else { el.textContent = CLOUD_MODE ? 'Cloud sync on' : 'Local only'; el.classList.toggle('on', CLOUD_MODE); el.classList.remove('offline'); }
+  else if(CLOUD_MODE){ el.textContent='Cloud sync on'; el.classList.add('on'); el.classList.remove('offline'); }
+  else if(hasConfig){ el.textContent='Signed out'; el.classList.remove('on'); el.classList.add('offline'); }
+  else { el.textContent='Local only'; el.classList.remove('on'); el.classList.remove('offline'); }
 }
 window.addEventListener('online', updateCloudBadge);
 window.addEventListener('offline', updateCloudBadge);
@@ -2055,12 +2066,25 @@ function initCloudIfConfigured(){
         serverRole = 'staff'; // fail closed — least privilege if role can't be read
       }
       CLOUD_MODE = true;
+      if(serverRole !== 'owner'){
+        // This device may hold owner data from a previous local-mode session.
+        // Staff must never see it, and no listener will refresh these, so clear
+        // them out rather than leaving stale figures on screen.
+        db.expenses = [];
+        db.staff = [];
+        db.staffLedger = [];
+        db.auditLog = [];
+      }
       updateCloudBadge();
       attachCloudListeners();
       setScreen('dashboard');
     } else {
+      // Stop every live listener FIRST. Otherwise they immediately fail with
+      // permission-denied (no auth) and their error screen covers the login form.
+      detachCloudListeners();
       CLOUD_MODE = false;
       serverRole = null;
+      currentUserEmail = '';
       updateCloudBadge();
       showLoginScreen();
     }
@@ -2107,28 +2131,48 @@ function safeRender(){
   try{ render(); }
   catch(e){ console.error('Render error:', e); showCloudConnectError('A display error happened: '+e.message); }
 }
+let cloudUnsubscribers = [];
+function detachCloudListeners(){
+  cloudUnsubscribers.forEach(fn=>{ try{ fn(); }catch(e){} });
+  cloudUnsubscribers = [];
+}
+/* Error handler shared by every listener. If we're in the middle of signing
+   out there is legitimately no auth, so a permission error is expected noise —
+   showing the error screen there would cover up the login form. */
+function listenerError(label){
+  return function(err){
+    console.error(label, err);
+    if(!firebase.auth().currentUser) return;   // signing out — ignore
+    if(label==='stock'){
+      showCloudConnectError('Database error ('+label+'): '+err.code+' — '+err.message);
+    }
+  };
+}
 function attachCloudListeners(){
+  detachCloudListeners();   // never stack listeners from a previous session
+  const sub = (fn)=>{ cloudUnsubscribers.push(fn); };
+
   // Collections everyone (owner + staff) can read
-  fsDB.collection('stock').onSnapshot(snap=>{ db.stock = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>{ console.error(err); showCloudConnectError('Database error (stock): '+err.code+' — '+err.message); });
-  fsDB.collection('purchases').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.purchases = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('purchases', err));
-  fsDB.collection('sales').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.sales = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('sales', err));
-  fsDB.collection('purchaseReturns').onSnapshot(snap=>{ db.purchaseReturns = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('purchaseReturns', err));
-  fsDB.collection('saleReturns').onSnapshot(snap=>{ db.saleReturns = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('saleReturns', err));
-  fsDB.collection('openingStock').onSnapshot(snap=>{ db.openingStock = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('openingStock', err));
-  fsDB.collection('quotations').onSnapshot(snap=>{ db.quotations = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('quotations', err));
-  fsDB.collection('categories').doc('main').onSnapshot(snap=>{ if(snap.exists) db.categories = snap.data().data || defaultCategories(); safeRender(); }, err=>console.error('categories', err));
-  fsDB.collection('settings').doc('shopInfo').onSnapshot(snap=>{ if(snap.exists) db.shopInfo = snap.data(); safeRender(); }, err=>console.error('shopInfo', err));
-  fsDB.collection('parties').onSnapshot(snap=>{ db.parties = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('parties', err));
+  sub(fsDB.collection('stock').onSnapshot(snap=>{ db.stock = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('stock')));
+  sub(fsDB.collection('purchases').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.purchases = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('purchases')));
+  sub(fsDB.collection('sales').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.sales = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('sales')));
+  sub(fsDB.collection('purchaseReturns').onSnapshot(snap=>{ db.purchaseReturns = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('purchaseReturns')));
+  sub(fsDB.collection('saleReturns').onSnapshot(snap=>{ db.saleReturns = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('saleReturns')));
+  sub(fsDB.collection('openingStock').onSnapshot(snap=>{ db.openingStock = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('openingStock')));
+  sub(fsDB.collection('quotations').onSnapshot(snap=>{ db.quotations = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('quotations')));
+  sub(fsDB.collection('categories').doc('main').onSnapshot(snap=>{ if(snap.exists) db.categories = snap.data().data || defaultCategories(); safeRender(); }, listenerError('categories')));
+  sub(fsDB.collection('settings').doc('shopInfo').onSnapshot(snap=>{ if(snap.exists) db.shopInfo = snap.data(); safeRender(); }, listenerError('shopInfo')));
+  sub(fsDB.collection('parties').onSnapshot(snap=>{ db.parties = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('parties')));
   // Staff need payments to compute customer outstanding balances correctly.
-  fsDB.collection('payments').onSnapshot(snap=>{ db.payments = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('payments', err));
+  sub(fsDB.collection('payments').onSnapshot(snap=>{ db.payments = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('payments')));
 
   // Owner-only collections. Staff accounts are blocked server-side by the
   // Firestore rules, so we don't even subscribe — avoids noisy permission errors.
   if(!isServerOwner()) return;
-  fsDB.collection('expenses').onSnapshot(snap=>{ db.expenses = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('expenses', err));
-  fsDB.collection('staff').onSnapshot(snap=>{ db.staff = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('staff', err));
-  fsDB.collection('staffLedger').onSnapshot(snap=>{ db.staffLedger = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('staffLedger', err));
-  fsDB.collection('auditLog').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.auditLog = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, err=>console.error('auditLog', err));
+  sub(fsDB.collection('expenses').onSnapshot(snap=>{ db.expenses = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('expenses')));
+  sub(fsDB.collection('staff').onSnapshot(snap=>{ db.staff = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('staff')));
+  sub(fsDB.collection('staffLedger').onSnapshot(snap=>{ db.staffLedger = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('staffLedger')));
+  sub(fsDB.collection('auditLog').orderBy('createdAt','desc').limit(300).onSnapshot(snap=>{ db.auditLog = snap.docs.map(d=>({id:d.id, ...d.data()})); safeRender(); }, listenerError('auditLog')));
 }
 window.openCloudModal = openCloudModal;
 window.connectCloud = connectCloud;
@@ -2496,7 +2540,14 @@ const EXPENSE_CATEGORIES = ['Staff Salary','Refreshment','Labour Charges','Rent'
 let expenseFilter = { category:'', from:'', to:'', search:'' };
 let editingExpenseId = null;
 
+function ownerOnlyNotice(){
+  return `<button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
+    <div class="card"><h3>Owner access only</h3>
+      <div class="step">This section is restricted to owner accounts. If you need access, ask the owner to change your role.</div>
+    </div>`;
+}
 function renderExpenses(){
+  if(!isOwner()) return ownerOnlyNotice();
   const today = todayStr();
   if(!expenseFilter.from) expenseFilter.from = today.slice(0,8)+'01'; // start of this month
   if(!expenseFilter.to) expenseFilter.to = today;
@@ -2637,6 +2688,7 @@ function staffBalance(staffId){
   return bal;
 }
 function renderStaffList(){
+  if(!isOwner()) return ownerOnlyNotice();
   const rows = db.staff.map(s=>`
     <div class="list-row" style="cursor:pointer;" onclick="openStaffDetail('${s.id}')">
       <div><div class="li-main">${s.name}</div><div class="li-sub">${s.role||''} ${s.phone?'• '+s.phone:''}</div></div>
@@ -2679,6 +2731,7 @@ let openStaffId = null;
 function openStaffDetail(id){ openStaffId = id; goTo('staffDetail'); }
 let editingStaffDetails = false;
 function renderStaffDetail(){
+  if(!isOwner()) return ownerOnlyNotice();
   const staff = db.staff.find(s=>s.id===openStaffId);
   if(!staff) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('staffList')">← Back</button>`;
   const bal = staffBalance(staff.id);
@@ -2810,6 +2863,7 @@ let pnlFrom = new Date().toISOString().slice(0,10);
 let pnlTo = new Date().toISOString().slice(0,10);
 
 function renderPnL(){
+  if(!isOwner()) return ownerOnlyNotice();
   const today = todayStr();
   let sales, purchases, saleReturns, purchaseReturns, expenses, periodLabel;
   if(pnlMode==='daily'){
@@ -3146,6 +3200,7 @@ window.setReminderLang = setReminderLang;
 
 /* ===================== AUDIT LOG ===================== */
 function renderAuditLog(){
+  if(!isOwner()) return ownerOnlyNotice();
   const entries = (db.auditLog||[]).slice().sort((a,b)=> (a.at||'')<(b.at||'') ? 1 : -1).slice(0,300);
   return `
     <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
@@ -3162,6 +3217,7 @@ function renderAuditLog(){
 
 /* ===================== USERS & ROLES ===================== */
 function renderUsers(){
+  if(!isOwner()) return ownerOnlyNotice();
   if(!CLOUD_MODE){
     return `
       <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back</button>
@@ -3177,12 +3233,23 @@ function renderUsers(){
       <button class="btn btn-ghost" onclick="doLogout()">Sign out</button>
     </div>
     <div class="card">
-      <h3>Add or change a user's role</h3>
-      <div class="step">
-        <b>Step 1 — create the login:</b> In Firebase Console → Authentication → Users → "Add user", enter their email and a password. Copy the <b>User UID</b> it shows.<br><br>
-        <b>Step 2 — set their role below</b> using that UID.
+      <h3>Add a staff account</h3>
+      <div class="step">Creates their login and sets their role in one step. You'll stay signed in as yourself throughout — share the email and password with them afterward however you normally would.</div>
+      <div class="field"><label>Their name</label><input id="quickUserName" placeholder="e.g. Rahim"/></div>
+      <div class="field"><label>Email</label><input id="quickUserEmail" type="email" placeholder="e.g. rahim@hammadworld.com"/></div>
+      <div class="field"><label>Temporary password (tell them to remember it — 6+ characters)</label><input id="quickUserPassword" placeholder="e.g. a starting password"/></div>
+      <div class="field"><label>Role</label>
+        <select id="quickUserRole">
+          <option value="staff">Staff</option>
+          <option value="owner">Owner (full access — use carefully)</option>
+        </select>
       </div>
-      <div class="field"><label>User UID (from Firebase Console)</label><input id="newUserUid" placeholder="e.g. a1B2c3D4..."/></div>
+      <button class="btn btn-primary" onclick="createStaffAccount()">Create account</button>
+    </div>
+    <div class="card">
+      <h3>Change a role, or add someone who already has a login</h3>
+      <div class="step">Use this only if they already have a Firebase login (created another way) and you just need to set or change their role. Find their User UID in Firebase Console → Authentication → Users.</div>
+      <div class="field"><label>User UID</label><input id="newUserUid" placeholder="e.g. a1B2c3D4..."/></div>
       <div class="row2">
         <div class="field"><label>Name (for your reference)</label><input id="newUserName"/></div>
         <div class="field"><label>Role</label>
@@ -3192,7 +3259,7 @@ function renderUsers(){
           </select>
         </div>
       </div>
-      <button class="btn btn-primary" onclick="saveUserRole()">Save role</button>
+      <button class="btn btn-ghost" onclick="saveUserRole()">Save role</button>
     </div>
     <div class="card">
       <h3>What staff can and cannot see</h3>
@@ -3202,6 +3269,41 @@ function renderUsers(){
     </div>
   `;
 }
+/* Creates a login for a new staff/owner account without disturbing the
+   current session. Firebase's normal "create user" call signs in as that
+   new user immediately — which would log the owner out mid-task. The fix:
+   spin up a second, throwaway connection to the same Firebase project just
+   for this one step, then close it. No Cloud Function or paid plan needed. */
+async function createStaffAccount(){
+  const name = document.getElementById('quickUserName').value.trim();
+  const email = document.getElementById('quickUserEmail').value.trim();
+  const password = document.getElementById('quickUserPassword').value;
+  const role = document.getElementById('quickUserRole').value;
+  if(!name || !email || !password){ alert('Fill in name, email and password.'); return; }
+  if(password.length<6){ alert('Password needs to be at least 6 characters.'); return; }
+
+  const cfg = getStoredConfig();
+  let secondaryApp;
+  try{
+    secondaryApp = firebase.initializeApp(cfg, 'AccountCreator_'+Date.now());
+    const cred = await secondaryApp.auth().createUserWithEmailAndPassword(email, password);
+    const newUid = cred.user.uid;
+    await secondaryApp.auth().signOut();
+    await fsDB.collection('users').doc(newUid).set({name, role});
+    logAudit('Staff account created', name+' ('+email+') → '+role);
+    alert('Account created.\n\nEmail: '+email+'\nPassword: '+password+'\n\nShare these with '+name+' — they will use them on the sign-in screen.');
+    document.getElementById('quickUserName').value='';
+    document.getElementById('quickUserEmail').value='';
+    document.getElementById('quickUserPassword').value='';
+  }catch(e){
+    console.error(e);
+    alert('Could not create account: '+e.message);
+  }finally{
+    if(secondaryApp) secondaryApp.delete().catch(()=>{});
+  }
+}
+window.createStaffAccount = createStaffAccount;
+
 function saveUserRole(){
   const uid = document.getElementById('newUserUid').value.trim();
   const name = document.getElementById('newUserName').value.trim();
