@@ -2069,7 +2069,6 @@ function showLoginScreen(){
       <div class="field"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password"/></div>
       <button class="btn btn-primary" onclick="doLogin()">Sign in</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="doPasswordReset()">Forgot password?</button>
-      <button class="btn btn-ghost" style="margin-top:8px;" onclick="disconnectCloud()">Use local-only mode instead</button>
     </div>
   `;
 }
@@ -2256,6 +2255,8 @@ function renderPartiesList(){
         <div class="field"><label>GST Number (optional)</label><input id="newPartyGstin" placeholder="18ADOPH1433M1ZB"/></div>
       </div>
       <div class="field"><label>Address (optional)</label><input id="newPartyAddress"/></div>
+      <div class="field"><label>Opening balance (if they already owe you / you already owe them, before using this app)</label><input id="newPartyOpening" type="number" value="0"/></div>
+      <div class="step">${partyFormType==='customer' ? 'Positive = they owe you.' : 'Positive = you owe them.'} Leave 0 if starting fresh.</div>
       <button class="btn btn-primary" onclick="saveParty()">+ Add ${partyFormType}</button>
     </div>
     <div class="card"><h3>Suppliers (${suppliers.length})</h3>${suppliers.length ? suppliers.map(row).join('') : `<div class="empty">None added yet.</div>`}</div>
@@ -2268,7 +2269,8 @@ function saveParty(){
   const phone = document.getElementById('newPartyPhone').value.trim();
   const address = document.getElementById('newPartyAddress').value.trim();
   const gstin = document.getElementById('newPartyGstin').value.trim();
-  const party = {name, phone, address, gstin, type: partyFormType};
+  const openingBalance = Number(document.getElementById('newPartyOpening').value)||0;
+  const party = {name, phone, address, gstin, openingBalance, type: partyFormType};
   if(CLOUD_MODE){
     fsDB.collection('parties').add(Object.assign({}, party, {createdAt:firebase.firestore.FieldValue.serverTimestamp()})).catch(e=>alert('Could not save: '+e.message));
   } else {
@@ -2348,6 +2350,8 @@ function renderPartyDetail(){
           <div class="field"><label>GSTIN</label><input id="editPartyGstin" value="${party.gstin||''}"/></div>
         </div>
         <div class="field"><label>Address</label><input id="editPartyAddress" value="${party.address||''}"/></div>
+        <div class="field"><label>Opening balance (${isSupplier?'positive = you owe them':'positive = they owe you'})</label><input id="editPartyOpening" type="number" value="${party.openingBalance||0}"/></div>
+        <div class="step">This is separate from bills already saved in the app — it only covers balance from before you started using it.</div>
         <div style="display:flex;gap:8px;">
           <button class="btn btn-primary" style="flex:1;" onclick="savePartyEdits('${party.id}')">Save</button>
           <button class="btn btn-ghost" style="flex:1;" onclick="editingPartyDetails=false;render()">Cancel</button>
@@ -2361,11 +2365,14 @@ function renderPartyDetail(){
           <div class="stat"><div class="num" style="color:${bal>0?'var(--red-700)':'var(--green-heading)'};">${fmt(Math.abs(bal))}</div><div class="lbl">${bal>0 ? (isSupplier?'You owe them':'They owe you') : 'Settled up'}</div></div>
         </div>
         <div style="display:flex;gap:8px;margin-top:10px;">
+          ${isOwner() ? `
           <button class="btn btn-ghost" style="flex:1;" onclick="editingPartyDetails=true;render()">✏️ Edit details</button>
           <button class="btn btn-danger" style="flex:1;" onclick="deleteParty('${party.id}')">🗑 Delete</button>
+          ` : ''}
         </div>
       `}
     </div>
+    ${isOwner() ? `
     <div class="card">
       <h3>Record a payment</h3>
       <div class="row2">
@@ -2374,6 +2381,7 @@ function renderPartyDetail(){
       </div>
       <button class="btn btn-primary" onclick="recordPayment('${party.id}')">${isSupplier?'Record payment made':'Record payment received'}</button>
     </div>
+    ` : ''}
     <div class="card">
       <h3>Bills (${bills.length})</h3>
       ${bills.length ? bills.map(b=>`
@@ -2391,7 +2399,8 @@ function savePartyEdits(partyId){
     name,
     phone: document.getElementById('editPartyPhone').value.trim(),
     gstin: document.getElementById('editPartyGstin').value.trim(),
-    address: document.getElementById('editPartyAddress').value.trim()
+    address: document.getElementById('editPartyAddress').value.trim(),
+    openingBalance: Number(document.getElementById('editPartyOpening').value)||0
   };
   if(CLOUD_MODE){
     fsDB.collection('parties').doc(partyId).update(updates).catch(e=>alert('Could not save: '+e.message));
