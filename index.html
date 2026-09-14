@@ -398,6 +398,7 @@ const titles = {
   partyDetail:['Party ledger','All bills for this party'],
   ledgerView:['Ledger','Detail view'],
   expenses:['Expenses','Daily expense tracker'],
+  addExpense:['Add Expense','Log a business expense'],
   staffList:['Staff Ledger','Salary, advances & pending balance'],
   staffDetail:['Staff ledger','Salary payments & advances'],
   pnl:['Profit & Loss','True cost, GST kept separate'],
@@ -440,6 +441,7 @@ function render(){
   if(currentScreen==='partyDetail'){ main.innerHTML = renderPartyDetail(); return; }
   if(currentScreen==='ledgerView'){ main.innerHTML = renderLedgerView(); return; }
   if(currentScreen==='expenses'){ main.innerHTML = renderExpenses(); return; }
+  if(currentScreen==='addExpense'){ main.innerHTML = renderAddExpense(); return; }
   if(currentScreen==='staffList'){ main.innerHTML = renderStaffList(); return; }
   if(currentScreen==='staffDetail'){ main.innerHTML = renderStaffDetail(); return; }
   if(currentScreen==='pnl'){ main.innerHTML = renderPnL(); return; }
@@ -508,7 +510,7 @@ function renderDashboard(){
     </div>
     <div class="card">
       <h3>More</h3>
-      <button class="btn btn-ghost" onclick="setScreen('expenses')">💵 Expense Management</button>
+      <button class="btn btn-ghost" onclick="setScreen('addExpense')">💵 Add Expense</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('pnl')">📊 Profit &amp; Loss</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('shopSettings')">🏪 Shop details (for invoices)</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('staffList')">👷 Staff Ledger</button>
@@ -527,6 +529,10 @@ function renderDashboard(){
       <h3>Customer balances</h3>
       <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('debtors')"><div class="li-main">Customer ledger (who owes us)</div><div class="li-right">→</div></div>
       <button class="btn btn-ghost" style="margin-top:10px;" onclick="setScreen('reminders')">🔔 Payment reminders</button>
+    </div>
+    <div class="card">
+      <h3>Expenses</h3>
+      <button class="btn btn-ghost" onclick="setScreen('addExpense')">💵 Add Expense</button>
     </div>
     <div class="card">
       <h3>Staff access</h3>
@@ -1950,7 +1956,8 @@ service cloud.firestore {
     match /meta/{doc}           { allow read, write: if signedIn(); }
 
     // OWNER ONLY — staff accounts are refused by the server, not just hidden.
-    match /expenses/{doc}    { allow read, write: if isOwner(); }
+    match /expenses/{doc}    { allow read, update, delete: if isOwner();
+                               allow create: if signedIn(); }
     // Staff can read payments (needed for customer balances) but not change them.
     match /payments/{doc}    { allow read: if signedIn();
                                allow write: if isOwner(); }
@@ -2546,6 +2553,39 @@ function ownerOnlyNotice(){
       <div class="step">This section is restricted to owner accounts. If you need access, ask the owner to change your role.</div>
     </div>`;
 }
+/* Lightweight entry-only screen — reachable by staff too. Just logs a
+   business expense; no viewing, filtering, or totals. That stays behind
+   the owner-only report (via Reports → View full expense tracker). */
+function renderAddExpense(){
+  editingExpenseId = null;
+  const today = todayStr();
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
+    <div class="card">
+      <h3>Add expense</h3>
+      <div class="row2">
+        <div class="field"><label>Date</label><input id="expDate" type="date" value="${today}"/></div>
+        <div class="field"><label>Category</label>
+          <select id="expCategory">
+            ${EXPENSE_CATEGORIES.map(c=>`<option>${c}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Amount</label><input id="expAmount" type="number" placeholder="0"/></div>
+        <div class="field"><label>Bill ref (optional)</label><input id="expBillRef" placeholder="e.g. HWP00012"/></div>
+      </div>
+      <div class="field"><label>Note (optional)</label><input id="expNote"/></div>
+      <button class="btn btn-primary" onclick="saveExpenseEntry()">+ Add expense</button>
+    </div>
+  `;
+}
+function saveExpenseEntry(){
+  if(saveExpense()===false) return;
+  setScreen('dashboard');
+}
+window.saveExpenseEntry = saveExpenseEntry;
+
 function renderExpenses(){
   if(!isOwner()) return ownerOnlyNotice();
   const today = todayStr();
@@ -2629,8 +2669,9 @@ function saveExpense(){
   const amount = Number(document.getElementById('expAmount').value);
   const billRef = document.getElementById('expBillRef').value.trim();
   const note = document.getElementById('expNote').value.trim();
-  if(!date || !amount || amount<=0){ alert('Enter a date and a valid amount.'); return; }
+  if(!date || !amount || amount<=0){ alert('Enter a date and a valid amount.'); return false; }
   const record = {date, category, amount, billRef, note};
+  logAudit('Expense '+(editingExpenseId?'edited':'added'), category+' • '+fmt(amount)+(note?' • '+note:''));
   if(editingExpenseId){
     if(CLOUD_MODE){
       fsDB.collection('expenses').doc(editingExpenseId).update(record).catch(e=>alert('Could not save: '+e.message));
@@ -2650,6 +2691,7 @@ function saveExpense(){
     }
   }
   render();
+  return true;
 }
 function deleteExpense(id){
   if(!confirm('Delete this expense entry?')) return;
