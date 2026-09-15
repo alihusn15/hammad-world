@@ -893,6 +893,7 @@ function savePurchase(){
   db.purchases.push({id, billNo, date:todayStr(), supplier:purchaseDraft.supplier||'Unknown supplier', partyId:purchaseDraft.partyId||null, amountPaid:purchaseAmountPaid, gstMode:purchaseDraft.gstMode, items:valid, totalAmount, totalGst, additionalCharges:purchaseDraft.additionalCharges||[], additionalChargesTotal:chargesTotal, actualAmountPaid:actualPaidTotal});
   saveDB(db);
   logAudit('Purchase created', billNo+' • '+(purchaseDraft.supplier||'Unknown')+' • '+fmt(fullPurchaseTotal));
+  valid.forEach(it=> syncCatalogItem(it.sku));
   purchaseDraft = {supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:''};
   openPrintPreview('purchase', id);
 }
@@ -996,6 +997,7 @@ function savePurchaseReturn(){
   db.purchaseReturns.push({id, billNo, date:todayStr(), items:valid, totalAmount, totalGst, gstMode:purchaseReturnDraft.gstMode});
   saveDB(db);
   logAudit('Purchase return', billNo+' • '+valid.length+' item(s)');
+  valid.forEach(it=> syncCatalogItem(it.stockId));
   purchaseReturnDraft = {gstMode:'excluded', items:[]};
   openPrintPreview('purchaseReturn', id);
 }
@@ -1024,6 +1026,7 @@ async function savePurchaseReturnCloud(){
       });
       tx.set(retRef, {billNo, date:todayStr(), items:valid, totalAmount, totalGst, gstMode:purchaseReturnDraft.gstMode, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     });
+    valid.forEach(it=> syncCatalogItem(it.stockId));
     purchaseReturnDraft = {gstMode:'excluded', items:[]};
     openPrintPreview('purchaseReturn', retRef.id);
   }catch(e){ console.error(e); alert(e.message); }
@@ -1150,6 +1153,7 @@ function applyOpeningStockItemsLocal(items){
     if(Number(it.mrp)>0) s.mrp = Number(it.mrp);
     it.sku = sku;
   });
+  valid.forEach(it=> syncCatalogItem(it.sku));
   return valid;
 }
 function saveOpeningStock(){
@@ -1192,6 +1196,7 @@ async function applyOpeningStockItemsCloud(items){
     });
   }
   await fsDB.collection('openingStock').doc().set({date:todayStr(), items:valid, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+  valid.forEach(it=> syncCatalogItem(it.sku));
   return valid;
 }
 async function saveOpeningStockCloud(){
@@ -1463,6 +1468,7 @@ function saveSale(){
   db.sales.push({id, billNo, date:todayStr(), customer:saleDraft.customer||'Walk-in', partyId:saleDraft.partyId||null, amountPaid:saleAmountPaid, gstMode:saleDraft.gstMode, items:saleDraft.items, totalAmount:grandTotal, totalGst, totalDiscount, additionalCharges:saleDraft.additionalCharges||[], additionalChargesTotal:chargesTotal, billDiscountPct});
   saveDB(db);
   logAudit('Sale created', billNo+' • '+(saleDraft.customer||'Walk-in')+' • '+fmt(grandTotal));
+  saleDraft.items.forEach(it=> syncCatalogItem(it.stockId));
   if(saleDraft.fromQuoteId){
     const q = (db.quotations||[]).find(x=>x.id===saleDraft.fromQuoteId);
     if(q){ q.status='converted'; q.convertedToBill=billNo; }
@@ -1559,6 +1565,7 @@ function saveSaleReturn(){
   db.saleReturns.push({id, billNo, date:todayStr(), refSaleId:saleReturnDraft.sale.billNo, items:valid, totalAmount, totalGst});
   saveDB(db);
   logAudit('Sale return', billNo+' • against '+(saleReturnDraft.sale?saleReturnDraft.sale.billNo:''));
+  valid.forEach(it=> syncCatalogItem(it.stockId));
   saleReturnDraft = {sale:null, items:[]};
   openPrintPreview('saleReturn', id);
 }
@@ -1583,6 +1590,7 @@ async function saveSaleReturnCloud(){
     const retRef = fsDB.collection('saleReturns').doc();
     batchWrite.set(retRef, {billNo, date:todayStr(), refSaleId:saleReturnDraft.sale.billNo, items:valid, totalAmount, totalGst, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
     await batchWrite.commit();
+    valid.forEach(it=> syncCatalogItem(it.stockId));
     saleReturnDraft = {sale:null, items:[]};
     openPrintPreview('saleReturn', retRef.id);
   }catch(e){ console.error(e); alert(e.message); }
@@ -2357,6 +2365,7 @@ async function savePurchaseCloud(){
     const underBillingGap = Math.max(0, actualPaidTotal - (billedGrandTotal+chargesTotal));
 
     const billNo = await nextBillNoCloud('purchase');
+    const purchaseRefHolder = {ref:null};
     await fsDB.runTransaction(async (tx)=>{
       const refs = valid.map(it=>fsDB.collection('stock').doc(it.sku));
       const snaps = await Promise.all(refs.map(r=>tx.get(r)));
@@ -2378,6 +2387,7 @@ async function savePurchaseCloud(){
         }, {merge:true});
       });
       const purchaseRef = fsDB.collection('purchases').doc();
+      purchaseRefHolder.ref = purchaseRef;
       const fullPurchaseTotal = billedGrandTotal+chargesTotal;
       const purchaseAmountPaid = purchaseDraft.partyId ? (purchaseDraft.paidInFull!==false ? fullPurchaseTotal : Number(purchaseDraft.amountPaid)||0) : fullPurchaseTotal;
       tx.set(purchaseRef, {
@@ -2389,7 +2399,8 @@ async function savePurchaseCloud(){
     });
     logAudit('Purchase created', billNo+' • '+(purchaseDraft.supplier||'Unknown'));
     purchaseDraft = {supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:''};
-    openPrintPreview('purchase', purchaseRef.id);
+    valid.forEach(it=> syncCatalogItem(it.sku));
+    openPrintPreview('purchase', purchaseRefHolder.ref.id);
   }catch(e){ console.error(e); alert('Could not save: '+e.message); }
 }
 async function saveSaleCloud(){
@@ -2435,6 +2446,7 @@ async function saveSaleCloud(){
       });
     });
     logAudit('Sale created', billNo+' • '+(saleDraft.customer||'Walk-in'));
+    saleDraft.items.forEach(it=> syncCatalogItem(it.stockId));
     if(saleDraft.fromQuoteId){
       fsDB.collection('quotations').doc(saleDraft.fromQuoteId).update({status:'converted', convertedToBill:billNo}).catch(e=>console.error(e));
     }
