@@ -338,7 +338,7 @@ function gstBreakdown(amount, gstPct, mode){
 
 /* ===================== APP STATE / ROUTER ===================== */
 let currentScreen = 'dashboard';
-let purchaseDraft = { supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:'' };
+let purchaseDraft = { supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:'', supplierBillNo:'' };
 
 function handlePartySelect(which, val){
   const draft = which==='purchase' ? purchaseDraft : saleDraft;
@@ -771,6 +771,7 @@ function renderPurchase(){
     <div class="card">
       <h3>Bill details</h3>
       <div class="field"><label>Supplier name</label><input value="${purchaseDraft.supplier}" oninput="purchaseDraft.supplier=this.value"/></div>
+      <div class="field"><label>Supplier's bill/invoice number (optional)</label><input value="${purchaseDraft.supplierBillNo||''}" oninput="purchaseDraft.supplierBillNo=this.value" placeholder="e.g. the number printed on their paper bill"/></div>
       <div class="field"><label>Link to supplier ledger (optional)</label>
         <select onchange="handlePartySelect('purchase', this.value)">
           <option value="">Not linked to a ledger</option>
@@ -890,11 +891,11 @@ function savePurchase(){
   });
   const fullPurchaseTotal = billedGrandTotal+chargesTotal;
   const purchaseAmountPaid = purchaseDraft.partyId ? (purchaseDraft.paidInFull!==false ? fullPurchaseTotal : Number(purchaseDraft.amountPaid)||0) : fullPurchaseTotal;
-  db.purchases.push({id, billNo, date:todayStr(), supplier:purchaseDraft.supplier||'Unknown supplier', partyId:purchaseDraft.partyId||null, amountPaid:purchaseAmountPaid, gstMode:purchaseDraft.gstMode, items:valid, totalAmount, totalGst, additionalCharges:purchaseDraft.additionalCharges||[], additionalChargesTotal:chargesTotal, actualAmountPaid:actualPaidTotal});
+  db.purchases.push({id, billNo, date:todayStr(), supplier:purchaseDraft.supplier||'Unknown supplier', supplierBillNo:purchaseDraft.supplierBillNo||'', partyId:purchaseDraft.partyId||null, amountPaid:purchaseAmountPaid, gstMode:purchaseDraft.gstMode, items:valid, totalAmount, totalGst, additionalCharges:purchaseDraft.additionalCharges||[], additionalChargesTotal:chargesTotal, actualAmountPaid:actualPaidTotal});
   saveDB(db);
   logAudit('Purchase created', billNo+' • '+(purchaseDraft.supplier||'Unknown')+' • '+fmt(fullPurchaseTotal));
   valid.forEach(it=> syncCatalogItem(it.sku));
-  purchaseDraft = {supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:''};
+  purchaseDraft = {supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:'', supplierBillNo:''};
   openPrintPreview('purchase', id);
 }
 
@@ -1816,6 +1817,7 @@ function renderBillDetail(){
     <div class="card">
       <h3>${rec.billNo}</h3>
       <div class="step">${rec.date} • ${isPurchase?rec.supplier:rec.customer}</div>
+      ${isPurchase ? `<div class="field"><label>Supplier's bill/invoice number</label><input value="${rec.supplierBillNo||''}" oninput="updateBillSupplierNo(this.value)"/></div>` : ''}
       ${isPurchase && rec.actualAmountPaid!=null ? `<div class="step">Billed: ${fmt((rec.totalAmount||0)+(rec.totalGst||0))} • Actually paid: <b>${fmt(rec.actualAmountPaid)}</b>${rec.actualAmountPaid!==(rec.totalAmount||0)+(rec.totalGst||0) ? ' (differs from billed value)' : ''}</div>` : ''}
     </div>
     <div class="card">
@@ -1831,6 +1833,13 @@ function goBackFromBillDetail(){
   if(stockId){ billDetailCtx = {stockId}; goTo('stockDetail'); }
   else setScreen('stock');
 }
+function updateBillSupplierNo(val){
+  const { type, id } = billDetailCtx;
+  if(type!=='purchase') return;
+  const rec = db.purchases.find(p=>p.id===id);
+  if(rec) rec.supplierBillNo = val;
+}
+window.updateBillSupplierNo = updateBillSupplierNo;
 function updateBillItem(idx, field, val){
   const { type, id } = billDetailCtx;
   const rec = type==='purchase' ? db.purchases.find(p=>p.id===id) : db.sales.find(s=>s.id===id);
@@ -1877,6 +1886,20 @@ function saveBillDetailEdits(){
       return;
     }
     alert('Changes saved. Note: this edit adjusts stock quantity but does not recalculate average cost — for cost corrections, use a fresh purchase entry instead.');
+    // Recalculate the bill's stored total from the edited items — otherwise
+    // the printed total, party balance and reports would keep showing the
+    // amount from before the edit.
+    const oldFullTotal = (rec.totalAmount||0)+(rec.totalGst||0);
+    let newTotalAmount=0, newTotalGst=0;
+    rec.items.forEach(it=>{
+      const amt = Number(it.qty)*Number(it.rate);
+      const br = gstBreakdown(amt, Number(it.gst), rec.gstMode);
+      newTotalAmount += br.taxable; newTotalGst += br.gst;
+    });
+    const wasPaidInFull = Math.abs((rec.amountPaid||0) - oldFullTotal) < 0.01;
+    rec.totalAmount = newTotalAmount;
+    rec.totalGst = newTotalGst;
+    if(wasPaidInFull) rec.amountPaid = newTotalAmount+newTotalGst+(rec.additionalChargesTotal||0);
   } else {
     // Reverse exactly what this sale originally took out of stock.
     originalItems.forEach(it=>{
@@ -1902,6 +1925,27 @@ function saveBillDetailEdits(){
       s.qty -= (Number(it.boxQty||0)*Number(it.piecesPerBox||1) + Number(it.pieceQty||0));
     });
     alert('Changes saved. Stock adjusted to match.');
+    // Recalculate the bill's stored total from the edited items.
+    const oldFullTotal = rec.totalAmount||0;
+    let newTotalAmount=0, newTotalGst=0, newTotalDiscount=0;
+    rec.items.forEach(it=>{
+      const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
+      const disc = gross*Number(it.discount||0)/100;
+      const net = gross-disc;
+      const br = gstBreakdown(net, Number(it.gst), rec.gstMode);
+      newTotalAmount += br.total; newTotalGst += br.gst; newTotalDiscount += disc;
+    });
+    const billDiscountPct = rec.billDiscountPct||0;
+    const billDiscountAmount = newTotalAmount*billDiscountPct/100;
+    newTotalAmount -= billDiscountAmount;
+    newTotalGst = newTotalGst*(1-billDiscountPct/100);
+    newTotalDiscount += billDiscountAmount;
+    const grandTotal = newTotalAmount + (rec.additionalChargesTotal||0);
+    const wasPaidInFull = Math.abs((rec.amountPaid||0) - oldFullTotal) < 0.01;
+    rec.totalAmount = grandTotal;
+    rec.totalGst = newTotalGst;
+    rec.totalDiscount = newTotalDiscount;
+    if(wasPaidInFull) rec.amountPaid = grandTotal;
   }
   saveDB(db);
   goBackFromBillDetail();
@@ -1927,6 +1971,15 @@ async function saveBillDetailEditsCloud(){
       deltas[key] = (deltas[key]||0) + (Number(it.qty)+Number(it.freeQty||0))*Number(it.piecesPerBox||1);
     });
     try{
+      let newTotalAmount=0, newTotalGst=0;
+      rec.items.forEach(it=>{
+        const amt = Number(it.qty)*Number(it.rate);
+        const br = gstBreakdown(amt, Number(it.gst), rec.gstMode);
+        newTotalAmount += br.taxable; newTotalGst += br.gst;
+      });
+      const oldFullTotal = (rec.totalAmount||0)+(rec.totalGst||0);
+      const wasPaidInFull = Math.abs((rec.amountPaid||0) - oldFullTotal) < 0.01;
+      const newAmountPaid = wasPaidInFull ? (newTotalAmount+newTotalGst+(rec.additionalChargesTotal||0)) : rec.amountPaid;
       await fsDB.runTransaction(async (tx)=>{
         const keys = Object.keys(deltas);
         const refs = keys.map(k=>fsDB.collection('stock').doc(k));
@@ -1938,8 +1991,9 @@ async function saveBillDetailEditsCloud(){
         snaps.forEach((snap,i)=>{
           tx.update(refs[i], {qty: firebase.firestore.FieldValue.increment(deltas[keys[i]])});
         });
-        tx.update(fsDB.collection('purchases').doc(id), {items: rec.items});
+        tx.update(fsDB.collection('purchases').doc(id), {items: rec.items, totalAmount: newTotalAmount, totalGst: newTotalGst, amountPaid: newAmountPaid, supplierBillNo: rec.supplierBillNo||''});
       });
+      rec.totalAmount = newTotalAmount; rec.totalGst = newTotalGst; rec.amountPaid = newAmountPaid;
       alert('Changes saved to cloud. Note: this edit adjusts stock quantity but does not recalculate average cost — for cost corrections, use a fresh purchase entry instead.');
       goBackFromBillDetail();
     }catch(e){ console.error(e); alert("Can't save: "+e.message); }
@@ -1952,6 +2006,23 @@ async function saveBillDetailEditsCloud(){
       deltas[it.stockId] = (deltas[it.stockId]||0) - (Number(it.boxQty||0)*Number(it.piecesPerBox||1) + Number(it.pieceQty||0));
     });
     try{
+      let newTotalAmount=0, newTotalGst=0, newTotalDiscount=0;
+      rec.items.forEach(it=>{
+        const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
+        const disc = gross*Number(it.discount||0)/100;
+        const net = gross-disc;
+        const br = gstBreakdown(net, Number(it.gst), rec.gstMode);
+        newTotalAmount += br.total; newTotalGst += br.gst; newTotalDiscount += disc;
+      });
+      const billDiscountPct = rec.billDiscountPct||0;
+      const billDiscountAmount = newTotalAmount*billDiscountPct/100;
+      newTotalAmount -= billDiscountAmount;
+      newTotalGst = newTotalGst*(1-billDiscountPct/100);
+      newTotalDiscount += billDiscountAmount;
+      const grandTotal = newTotalAmount + (rec.additionalChargesTotal||0);
+      const oldFullTotal = rec.totalAmount||0;
+      const wasPaidInFull = Math.abs((rec.amountPaid||0) - oldFullTotal) < 0.01;
+      const newAmountPaid = wasPaidInFull ? grandTotal : rec.amountPaid;
       await fsDB.runTransaction(async (tx)=>{
         const keys = Object.keys(deltas);
         const refs = keys.map(k=>fsDB.collection('stock').doc(k));
@@ -1963,8 +2034,9 @@ async function saveBillDetailEditsCloud(){
         snaps.forEach((snap,i)=>{
           tx.update(refs[i], {qty: firebase.firestore.FieldValue.increment(deltas[keys[i]])});
         });
-        tx.update(fsDB.collection('sales').doc(id), {items: rec.items});
+        tx.update(fsDB.collection('sales').doc(id), {items: rec.items, totalAmount: grandTotal, totalGst: newTotalGst, totalDiscount: newTotalDiscount, amountPaid: newAmountPaid});
       });
+      rec.totalAmount = grandTotal; rec.totalGst = newTotalGst; rec.totalDiscount = newTotalDiscount; rec.amountPaid = newAmountPaid;
       alert('Changes saved to cloud. Stock adjusted to match on every device.');
       goBackFromBillDetail();
     }catch(e){ console.error(e); alert("Can't save: "+e.message); }
@@ -2391,14 +2463,14 @@ async function savePurchaseCloud(){
       const fullPurchaseTotal = billedGrandTotal+chargesTotal;
       const purchaseAmountPaid = purchaseDraft.partyId ? (purchaseDraft.paidInFull!==false ? fullPurchaseTotal : Number(purchaseDraft.amountPaid)||0) : fullPurchaseTotal;
       tx.set(purchaseRef, {
-        billNo, date: todayStr(), supplier: purchaseDraft.supplier||'Unknown supplier', partyId: purchaseDraft.partyId||null,
+        billNo, date: todayStr(), supplier: purchaseDraft.supplier||'Unknown supplier', supplierBillNo: purchaseDraft.supplierBillNo||'', partyId: purchaseDraft.partyId||null,
         amountPaid: purchaseAmountPaid, gstMode: purchaseDraft.gstMode, items: valid, totalAmount, totalGst,
         additionalCharges: purchaseDraft.additionalCharges||[], additionalChargesTotal: chargesTotal, actualAmountPaid: actualPaidTotal,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
     });
     logAudit('Purchase created', billNo+' • '+(purchaseDraft.supplier||'Unknown'));
-    purchaseDraft = {supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:''};
+    purchaseDraft = {supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:'', supplierBillNo:''};
     valid.forEach(it=> syncCatalogItem(it.sku));
     openPrintPreview('purchase', purchaseRefHolder.ref.id);
   }catch(e){ console.error(e); alert('Could not save: '+e.message); }
@@ -3721,7 +3793,7 @@ function renderPrintPreview(){
   const { type, id } = printDoc;
   const shop = db.shopInfo || {name:'Hammad World'};
   let record, docTitle, refLine;
-  if(type==='purchase'){ record = db.purchases.find(p=>p.id===id); docTitle='Purchase Bill'; refLine='Supplier: '+(record?record.supplier:''); }
+  if(type==='purchase'){ record = db.purchases.find(p=>p.id===id); docTitle='Purchase Bill'; refLine='Supplier: '+(record?record.supplier:'')+(record&&record.supplierBillNo?' • Their bill no: '+record.supplierBillNo:''); }
   else if(type==='sale'){ record = db.sales.find(s=>s.id===id); docTitle='Sale Bill'; refLine='Customer: '+(record?record.customer:''); }
   else if(type==='purchaseReturn'){ record = db.purchaseReturns.find(r=>r.id===id); docTitle='Purchase Return / Debit Note'; refLine='Return to distributor'; }
   else if(type==='saleReturn'){ record = db.saleReturns.find(r=>r.id===id); docTitle='Sale Return / Credit Note'; refLine='Against bill: '+(record?record.refSaleId:''); }
