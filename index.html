@@ -1622,6 +1622,31 @@ function openStockDetail(stockId){
   billDetailCtx = {stockId};
   goTo('stockDetail');
 }
+function saveStockAdjustment(stockId){
+  const s = db.stock.find(x=>x.id===stockId);
+  if(!s) return;
+  const boxes = Number(document.getElementById('adjustBoxes').value);
+  const pieces = Number(document.getElementById('adjustPieces').value);
+  const reason = document.getElementById('adjustReason').value;
+  const note = document.getElementById('adjustNote').value.trim();
+  if(isNaN(boxes) || isNaN(pieces) || boxes<0 || pieces<0){ alert('Enter valid numbers.'); return; }
+  const newQty = boxes*(s.piecesPerBox||1) + pieces;
+  const oldQty = s.qty;
+  if(newQty===oldQty){ alert('That matches the current quantity — nothing to change.'); return; }
+  if(!confirm('Change '+s.itemName+' from '+oldQty+' to '+newQty+' pieces?\nReason: '+reason)) return;
+  logAudit('Stock corrected', s.itemName+' • '+oldQty+' → '+newQty+' • '+reason+(note?' • '+note:''));
+  s.qty = newQty;
+  if(CLOUD_MODE){
+    fsDB.collection('stock').doc(stockId).update({qty: newQty}).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    saveDB(db);
+  }
+  syncCatalogItem(stockId);
+  alert('Stock quantity corrected.');
+  render();
+}
+window.saveStockAdjustment = saveStockAdjustment;
+
 function saveLowStockThreshold(stockId){
   const boxes = Number(document.getElementById('lowStockBoxes').value);
   if(boxes<0 || isNaN(boxes)){ alert('Enter a valid number of boxes.'); return; }
@@ -1661,6 +1686,27 @@ function renderStockDetail(){
         <div class="stat"><div class="num">${fmt(s.mrp)}</div><div class="lbl">MRP / box</div></div>
       </div>
     </div>
+    ${isOwner() ? `
+    <div class="card">
+      <h3>Correct stock quantity</h3>
+      <div class="step">Use this to fix a data-entry mistake or a physical count difference — directly, without needing to edit a bill. This only changes quantity; cost stays as-is.</div>
+      <div class="row2">
+        <div class="field"><label>Correct boxes</label><input id="adjustBoxes" type="number" value="${boxes}"/></div>
+        <div class="field"><label>Correct loose pieces</label><input id="adjustPieces" type="number" value="${loose}"/></div>
+      </div>
+      <div class="field"><label>Reason</label>
+        <select id="adjustReason">
+          <option>Data entry correction</option>
+          <option>Physical count correction</option>
+          <option>Damaged / broken</option>
+          <option>Lost / theft</option>
+          <option>Other</option>
+        </select>
+      </div>
+      <div class="field"><label>Note (optional)</label><input id="adjustNote"/></div>
+      <button class="btn btn-primary" onclick="saveStockAdjustment('${s.id}')">Save correction</button>
+    </div>
+    ` : ''}
     <div class="card">
       <h3>Low stock alert</h3>
       <div class="step">Flag this product as "Low stock" once it drops to this many boxes or fewer. Default is 1 box.</div>
