@@ -339,6 +339,50 @@ function gstBreakdown(amount, gstPct, mode){
 /* ===================== APP STATE / ROUTER ===================== */
 let currentScreen = 'dashboard';
 let purchaseDraft = { supplier:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'excluded', items:[], additionalCharges:[], actualAmountPaid:'' };
+
+function handlePartySelect(which, val){
+  const draft = which==='purchase' ? purchaseDraft : saleDraft;
+  if(val==='__new__'){
+    draft.showNewPartyForm = true;
+    draft.partyId = null;
+  } else {
+    draft.partyId = val || null;
+    draft.showNewPartyForm = false;
+    if(val){
+      const p = db.parties.find(x=>x.id===val);
+      if(p){ if(which==='purchase') draft.supplier=p.name; else draft.customer=p.name; }
+    }
+  }
+  render();
+}
+function quickAddParty(which){
+  const draft = which==='purchase' ? purchaseDraft : saleDraft;
+  const name = document.getElementById('quickPartyName').value.trim();
+  if(!name){ alert('Enter a name.'); return; }
+  const phone = document.getElementById('quickPartyPhone').value.trim();
+  const gstin = document.getElementById('quickPartyGstin').value.trim();
+  const address = document.getElementById('quickPartyAddress').value.trim();
+  const party = {name, phone, address, gstin, openingBalance:0, type: which==='purchase'?'supplier':'customer'};
+  const applyAndClose = (id)=>{
+    draft.partyId = id;
+    if(which==='purchase') draft.supplier = name; else draft.customer = name;
+    draft.showNewPartyForm = false;
+    render();
+  };
+  if(CLOUD_MODE){
+    fsDB.collection('parties').add(Object.assign({}, party, {createdAt:firebase.firestore.FieldValue.serverTimestamp()}))
+      .then(ref=>{ logAudit('Party added', name+' ('+party.type+')'); applyAndClose(ref.id); })
+      .catch(e=>alert('Could not save: '+e.message));
+  } else {
+    party.id = nextId('PTY');
+    db.parties.push(party);
+    saveDB(db);
+    logAudit('Party added', name+' ('+party.type+')');
+    applyAndClose(party.id);
+  }
+}
+window.handlePartySelect = handlePartySelect;
+window.quickAddParty = quickAddParty;
 let saleDraft = { customer:'', partyId:null, paidInFull:true, amountPaid:0, gstMode:'included', items:[], additionalCharges:[], billDiscount:0 };
 const ADDITIONAL_CHARGE_CATEGORIES = ['Transport','Loading','Unloading','Labour Charges','Others'];
 function renderAdditionalChargesSection(draft){
@@ -727,11 +771,24 @@ function renderPurchase(){
       <h3>Bill details</h3>
       <div class="field"><label>Supplier name</label><input value="${purchaseDraft.supplier}" oninput="purchaseDraft.supplier=this.value"/></div>
       <div class="field"><label>Link to supplier ledger (optional)</label>
-        <select onchange="purchaseDraft.partyId=this.value||null; if(this.value){const p=db.parties.find(x=>x.id===this.value); if(p) purchaseDraft.supplier=p.name;} render();">
+        <select onchange="handlePartySelect('purchase', this.value)">
           <option value="">Not linked to a ledger</option>
           ${db.parties.filter(p=>p.type==='supplier').map(p=>`<option value="${p.id}" ${purchaseDraft.partyId===p.id?'selected':''}>${p.name}</option>`).join('')}
+          <option value="__new__">+ Add new supplier...</option>
         </select>
       </div>
+      ${purchaseDraft.showNewPartyForm ? `
+      <div class="card" style="margin-top:0;">
+        <h3>New supplier</h3>
+        <div class="field"><label>Name</label><input id="quickPartyName"/></div>
+        <div class="row2">
+          <div class="field"><label>Phone</label><input id="quickPartyPhone"/></div>
+          <div class="field"><label>GST Number</label><input id="quickPartyGstin" placeholder="18ADOPH1433M1ZB"/></div>
+        </div>
+        <div class="field"><label>Address</label><input id="quickPartyAddress"/></div>
+        <button class="btn btn-primary btn-sm" onclick="quickAddParty('purchase')">Save &amp; use this supplier</button>
+      </div>
+      ` : ''}
       ${purchaseDraft.partyId ? `
       <div class="row2">
         <div class="field"><label>Paid in full?</label>
@@ -1284,11 +1341,24 @@ function renderSales(){
       <h3>Customer & GST</h3>
       <div class="field"><label>Customer name</label><input value="${saleDraft.customer}" oninput="saleDraft.customer=this.value" placeholder="Walk-in"/></div>
       <div class="field"><label>Link to customer ledger (optional, for credit sales)</label>
-        <select onchange="saleDraft.partyId=this.value||null; if(this.value){const p=db.parties.find(x=>x.id===this.value); if(p) saleDraft.customer=p.name;} render();">
+        <select onchange="handlePartySelect('sale', this.value)">
           <option value="">Cash sale — don't track on a ledger</option>
           ${db.parties.filter(p=>p.type==='customer').map(p=>`<option value="${p.id}" ${saleDraft.partyId===p.id?'selected':''}>${p.name}</option>`).join('')}
+          <option value="__new__">+ Add new customer...</option>
         </select>
       </div>
+      ${saleDraft.showNewPartyForm ? `
+      <div class="card" style="margin-top:0;">
+        <h3>New customer</h3>
+        <div class="field"><label>Name</label><input id="quickPartyName"/></div>
+        <div class="row2">
+          <div class="field"><label>Phone</label><input id="quickPartyPhone"/></div>
+          <div class="field"><label>GST Number</label><input id="quickPartyGstin" placeholder="18ADOPH1433M1ZB"/></div>
+        </div>
+        <div class="field"><label>Address</label><input id="quickPartyAddress"/></div>
+        <button class="btn btn-primary btn-sm" onclick="quickAddParty('sale')">Save &amp; use this customer</button>
+      </div>
+      ` : ''}
       ${saleDraft.partyId ? `
       <div class="row2">
         <div class="field"><label>Paid in full?</label>
@@ -1948,7 +2018,8 @@ service cloud.firestore {
     match /quotations/{doc}     { allow read, write: if signedIn(); }
     match /openingStock/{doc}   { allow read, write: if signedIn(); }
     match /parties/{doc}        { allow read: if signedIn();
-                                  allow write: if isOwner(); }
+                                  allow create: if signedIn();
+                                  allow update, delete: if isOwner(); }
     match /categories/{doc}     { allow read: if signedIn();
                                   allow write: if isOwner(); }
     match /settings/{doc}       { allow read: if signedIn();
