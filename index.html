@@ -557,6 +557,7 @@ function renderDashboard(){
       <button class="btn btn-ghost" onclick="setScreen('addExpense')">💵 Add Expense</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('pnl')">📊 Profit &amp; Loss</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('shopSettings')">🏪 Shop details (for invoices)</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="syncAllToCatalog()">🌐 Sync catalog to public site now</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('staffList')">👷 Staff Ledger</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('auditLog')">📋 Activity log</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('users')">👥 Users &amp; roles</button>
@@ -1668,6 +1669,34 @@ function renderStockDetail(){
         <button class="btn btn-ghost" style="align-self:flex-end;" onclick="saveLowStockThreshold('${s.id}')">Save</button>
       </div>
     </div>
+    ${isOwner() ? `
+    <div class="card">
+      <h3>Public catalog</h3>
+      <div class="step">Photos and status shown on the public website. Up to 4 photos per product, sharp quality (~1600px, no blur).</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        ${(s.catalogPhotos||[]).map((url,idx)=>`
+          <div style="position:relative;width:80px;height:80px;">
+            <img src="${url}" style="width:80px;height:80px;object-fit:cover;border-radius:9px;border:1px solid var(--line);"/>
+            <button onclick="removeProductPhoto('${s.id}',${idx})" style="position:absolute;top:-6px;right:-6px;width:22px;height:22px;border-radius:50%;background:var(--red-700);color:white;border:none;font-weight:800;">×</button>
+          </div>
+        `).join('')}
+      </div>
+      ${(s.catalogPhotos||[]).length < 4 ? `
+        <label class="btn btn-ghost" style="display:flex;">
+          📷 ${(s.catalogPhotos||[]).length ? 'Add more photos' : 'Upload photos'} (${4-(s.catalogPhotos||[]).length} slot(s) left)
+          <input type="file" accept="image/*" multiple style="display:none;" onchange="handlePhotoUpload('${s.id}', this)"/>
+        </label>
+        <div id="photoUploadStatus" class="step"></div>
+      ` : `<div class="step">Maximum 4 photos reached.</div>`}
+      <div class="field" style="margin-top:10px;">
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" ${s.comingSoon?'checked':''} onchange="toggleComingSoon('${s.id}', this.checked)"/>
+          Mark as "Coming Soon" on the public site (overrides stock-based status)
+        </label>
+      </div>
+      <div class="step">Current public status: <b>${computeCatalogStatus(s)}</b></div>
+    </div>
+    ` : ''}
     <div class="card">
       <h3>Purchase & sale history (${history.length})</h3>
       ${history.length ? history.map(h=>{
@@ -2017,6 +2046,11 @@ service cloud.firestore {
     match /purchaseReturns/{doc}{ allow read, create: if signedIn(); }
     match /quotations/{doc}     { allow read, write: if signedIn(); }
     match /openingStock/{doc}   { allow read, write: if signedIn(); }
+
+    // PUBLIC — the customer website reads this with no login at all.
+    // Only ever write customer-safe fields here (see syncCatalogItem in the app).
+    match /catalog/{doc} { allow read: if true;
+                           allow write: if isOwner(); }
     match /parties/{doc}        { allow read: if signedIn();
                                   allow create: if signedIn();
                                   allow update, delete: if isOwner(); }
@@ -2438,6 +2472,147 @@ function totalToPay(){ return db.parties.filter(p=>p.type==='supplier').reduce((
 function totalToCollect(){ return db.parties.filter(p=>p.type==='customer').reduce((a,p)=>a+Math.max(0,partyBalance(p.id)),0); }
 function stockValueTotal(){ return db.stock.reduce((a,s)=>a + (s.avgCost!=null ? s.qty*s.avgCost : (s.qty/(s.piecesPerBox||1))*(s.purchaseRate||0)),0); }
 function lowStockThresholdFor(s){ return s.lowStockThreshold!=null ? s.lowStockThreshold : (s.piecesPerBox||1); }
+
+/* ===================== PUBLIC CATALOG SYNC =====================
+   Mirrors ONLY customer-safe fields into a separate "catalog" collection
+   that the public website reads with no login. Never include cost, avgCost,
+   purchaseRate, gst, or supplier info here — this collection is world-readable
+   by design, unlike everything else in this app. */
+function computeCatalogStatus(s){
+  if(s.comingSoon) return 'Coming Soon';
+  if(!s.qty || s.qty<=0) return 'Out of Stock';
+  if(s.qty <= lowStockThresholdFor(s)) return 'Limited Stock';
+  return 'In Stock';
+}
+function syncCatalogItem(sku){
+  if(!CLOUD_MODE || !fsDB) return;   // catalog only makes sense with cloud sync on
+  const s = db.stock.find(x=>x.id===sku);
+  if(!s) return;
+  const entry = {
+    itemName: s.itemName||'', category: s.category||'', subcategory: s.subcategory||'',
+    material: s.material||'', size: s.size||'', batch: s.batch||'',
+    status: computeCatalogStatus(s), photos: s.catalogPhotos||[],
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  fsDB.collection('catalog').doc(sku).set(entry, {merge:true}).catch(e=>console.error('catalog sync', e));
+}
+function syncAllToCatalog(){
+  if(!CLOUD_MODE || !fsDB){ alert('Turn on cloud sync first — the public site reads from there.'); return; }
+  if(!confirm('Publish all '+db.stock.length+' product(s) to the public catalog now?')) return;
+  db.stock.forEach(s=> syncCatalogItem(s.id));
+  logAudit('Catalog synced', db.stock.length+' product(s)');
+  alert('Sync started — items will appear on the public site within a few seconds.');
+}
+window.syncAllToCatalog = syncAllToCatalog;
+
+/* ===================== PHOTO UPLOAD (via Cloudflare R2) =====================
+   Photos never touch Firestore — they're compressed on-device, then sent to a
+   small Worker that stores them in R2 and hands back a public URL. The Worker
+   holds the real R2 keys; the app only knows a shared "upload secret", which
+   is a reasonable deterrent for a small shop's catalog, not bank-grade
+   security (see the Worker's own code comments for the full explanation). */
+const R2_WORKER_URL = 'https://hammad-world-photo-upload.hammadworld25.workers.dev';
+const R2_UPLOAD_SECRET = 'Wnb3zSQ4xvNDkTZKb-Q8CzyP7qVA42nGUzxSqAcviEE';
+
+function resizeImageFile(file, maxDimension, quality){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = ()=>{ img.src = reader.result; };
+    reader.onerror = reject;
+    img.onload = ()=>{
+      let { width, height } = img;
+      if(width > height && width > maxDimension){ height = Math.round(height*maxDimension/width); width = maxDimension; }
+      else if(height > maxDimension){ width = Math.round(width*maxDimension/height); height = maxDimension; }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      canvas.toBlob(blob=>{ blob ? resolve(blob) : reject(new Error('Could not process image')); }, 'image/jpeg', quality);
+    };
+    img.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadProductPhoto(sku, file, slotIndex){
+  // 1600px / 90% quality — sharp on any screen, not the heavy compression
+  // we'd have needed if these were stored inside Firestore.
+  const blob = await resizeImageFile(file, 1600, 0.9);
+  const fileKey = 'products/'+sku+'-'+slotIndex+'-'+Date.now()+'.jpg';
+  const resp = await fetch(R2_WORKER_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'image/jpeg',
+      'X-Upload-Secret': R2_UPLOAD_SECRET,
+      'X-File-Key': fileKey
+    },
+    body: blob
+  });
+  if(!resp.ok){ throw new Error('Upload failed ('+resp.status+'): '+(await resp.text())); }
+  const data = await resp.json();
+  return data.url;
+}
+
+async function handlePhotoUpload(sku, fileInput){
+  const s = db.stock.find(x=>x.id===sku);
+  if(!s) return;
+  const files = Array.from(fileInput.files||[]);
+  if(!files.length) return;
+  if(!s.catalogPhotos) s.catalogPhotos = [];
+  const startSlot = s.catalogPhotos.length;
+  const remaining = Math.max(0, 4 - s.catalogPhotos.length);
+  if(!remaining){ alert('This product already has 4 photos — remove one first.'); fileInput.value=''; return; }
+  const toUpload = files.slice(0, remaining);
+  render(); // show a busy state immediately rather than a frozen screen
+  const statusEl = document.getElementById('photoUploadStatus');
+  if(statusEl) statusEl.textContent = 'Uploading '+toUpload.length+' photo(s)...';
+  try{
+    for(let i=0;i<toUpload.length;i++){
+      const url = await uploadProductPhoto(sku, toUpload[i], startSlot+i);
+      s.catalogPhotos.push(url);
+    }
+    if(CLOUD_MODE){
+      await fsDB.collection('stock').doc(sku).update({catalogPhotos: s.catalogPhotos});
+    } else {
+      saveDB(db);
+    }
+    syncCatalogItem(sku);
+    logAudit('Product photos uploaded', s.itemName+' • '+toUpload.length+' photo(s)');
+  }catch(e){
+    console.error(e);
+    alert('Photo upload failed: '+e.message+'\n\nCheck: Worker URL is correct, and the Worker\'s bindings/variables are all saved.');
+  }
+  fileInput.value = '';
+  render();
+}
+function removeProductPhoto(sku, idx){
+  const s = db.stock.find(x=>x.id===sku);
+  if(!s || !s.catalogPhotos) return;
+  if(!confirm('Remove this photo from the product? (It stays in R2 storage — ask the owner to delete it there later if you want to fully free the space.)')) return;
+  s.catalogPhotos.splice(idx,1);
+  if(CLOUD_MODE){
+    fsDB.collection('stock').doc(sku).update({catalogPhotos: s.catalogPhotos}).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    saveDB(db);
+  }
+  syncCatalogItem(sku);
+  render();
+}
+function toggleComingSoon(sku, checked){
+  const s = db.stock.find(x=>x.id===sku);
+  if(!s) return;
+  s.comingSoon = checked;
+  if(CLOUD_MODE){
+    fsDB.collection('stock').doc(sku).update({comingSoon: checked}).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    saveDB(db);
+  }
+  syncCatalogItem(sku);
+  render();
+}
+window.handlePhotoUpload = handlePhotoUpload;
+window.removeProductPhoto = removeProductPhoto;
+window.toggleComingSoon = toggleComingSoon;
 
 function recordPayment(partyId){
   const amount = Number(document.getElementById('paymentAmount').value);
