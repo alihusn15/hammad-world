@@ -3054,7 +3054,7 @@ function syncCatalogItem(sku){
   const entry = {
     itemName: s.itemName||'', category: s.category||'', subcategory: s.subcategory||'',
     material: s.material||'', size: s.size||'', batch: s.batch||'',
-    status: computeCatalogStatus(s), photos: s.catalogPhotos||[], featured: !!s.featured,
+    status: computeCatalogStatus(s), photos: s.catalogPhotos||[], thumbs: s.catalogThumbs||[], featured: !!s.featured,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   fsDB.collection('catalog').doc(sku).set(entry, {merge:true}).catch(e=>console.error('catalog sync', e));
@@ -3097,11 +3097,7 @@ function resizeImageFile(file, maxDimension, quality){
   });
 }
 
-async function uploadProductPhoto(sku, file, slotIndex){
-  // 1600px / 90% quality — sharp on any screen, not the heavy compression
-  // we'd have needed if these were stored inside Firestore.
-  const blob = await resizeImageFile(file, 1600, 0.9);
-  const fileKey = 'products/'+sku+'-'+slotIndex+'-'+Date.now()+'.jpg';
+async function uploadOneToR2(blob, fileKey){
   const resp = await fetch(R2_WORKER_URL, {
     method: 'POST',
     headers: {
@@ -3112,8 +3108,20 @@ async function uploadProductPhoto(sku, file, slotIndex){
     body: blob
   });
   if(!resp.ok){ throw new Error('Upload failed ('+resp.status+'): '+(await resp.text())); }
-  const data = await resp.json();
-  return data.url;
+  return (await resp.json()).url;
+}
+async function uploadProductPhoto(sku, file, slotIndex){
+  // Two sizes per photo. The browsing grid shows images around 180px wide, so
+  // serving the 1600px original there would download roughly 10x more than the
+  // screen can use — noticeably slow on mobile once a category has many
+  // products. The full size is still uploaded for tap-to-zoom.
+  const stamp = Date.now();
+  const fullBlob  = await resizeImageFile(file, 1600, 0.9);
+  const thumbBlob = await resizeImageFile(file, 500, 0.82);
+  const base = 'products/'+sku+'-'+slotIndex+'-'+stamp;
+  const fullUrl  = await uploadOneToR2(fullBlob,  base+'.jpg');
+  const thumbUrl = await uploadOneToR2(thumbBlob, base+'-thumb.jpg');
+  return {full: fullUrl, thumb: thumbUrl};
 }
 
 async function handlePhotoUpload(sku, fileInput){
@@ -3129,13 +3137,15 @@ async function handlePhotoUpload(sku, fileInput){
   render(); // show a busy state immediately rather than a frozen screen
   const statusEl = document.getElementById('photoUploadStatus');
   if(statusEl) statusEl.textContent = 'Uploading '+toUpload.length+' photo(s)...';
+  if(!s.catalogThumbs) s.catalogThumbs = [];
   try{
     for(let i=0;i<toUpload.length;i++){
-      const url = await uploadProductPhoto(sku, toUpload[i], startSlot+i);
-      s.catalogPhotos.push(url);
+      const r = await uploadProductPhoto(sku, toUpload[i], startSlot+i);
+      s.catalogPhotos.push(r.full);
+      s.catalogThumbs.push(r.thumb);
     }
     if(CLOUD_MODE){
-      await fsDB.collection('stock').doc(sku).update({catalogPhotos: s.catalogPhotos});
+      await fsDB.collection('stock').doc(sku).update({catalogPhotos: s.catalogPhotos, catalogThumbs: s.catalogThumbs});
     } else {
       saveDB(db);
     }
@@ -3154,8 +3164,9 @@ function removeProductPhoto(sku, idx){
   if(!s || !s.catalogPhotos) return;
   if(!confirm('Remove this photo from the product? (It stays in R2 storage — ask the owner to delete it there later if you want to fully free the space.)')) return;
   s.catalogPhotos.splice(idx,1);
+  if(s.catalogThumbs) s.catalogThumbs.splice(idx,1);
   if(CLOUD_MODE){
-    fsDB.collection('stock').doc(sku).update({catalogPhotos: s.catalogPhotos}).catch(e=>alert('Could not save: '+e.message));
+    fsDB.collection('stock').doc(sku).update({catalogPhotos: s.catalogPhotos, catalogThumbs: s.catalogThumbs||[]}).catch(e=>alert('Could not save: '+e.message));
   } else {
     saveDB(db);
   }
