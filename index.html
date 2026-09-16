@@ -75,6 +75,8 @@
   .stat .num{font-family:'Poppins',sans-serif;font-size:19px;font-weight:700;color:var(--stat-gold);}
   .stat .lbl{font-size:11.5px;color:var(--ink-500);margin-top:2px;}
   .list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);}
+  .suggest-box{max-height:280px;overflow-y:auto;border:1.5px solid var(--line);border-radius:10px;padding:0 12px;margin-top:6px;background:var(--white);}
+  .suggest-box .list-row:last-child{border-bottom:none;}
   .list-row:last-child{border-bottom:none;}
   .list-row .li-main{font-size:13.5px;font-weight:600;}
   .list-row .li-sub{font-size:11.5px;color:var(--ink-500);margin-top:1px;}
@@ -325,6 +327,44 @@ function fmt(n){ return '₹' + (Math.round((n||0)*100)/100).toLocaleString('en-
 function findStockRow(itemName, batch){
   return db.stock.find(s => s.itemName.trim().toLowerCase()===(itemName||'').trim().toLowerCase() && (s.batch||'').trim().toLowerCase()===(batch||'').trim().toLowerCase());
 }
+function showStockSuggestions(formType, idx, query){
+  const el = document.getElementById('stockSuggest_'+formType+'_'+idx);
+  if(!el) return;
+  const linkedEl = document.getElementById('stockLinked_'+formType+'_'+idx);
+  if(linkedEl) linkedEl.remove();
+  const q = (query||'').trim().toLowerCase();
+  if(!q){ el.innerHTML=''; return; }
+  const matches = db.stock.filter(s=>s.itemName.toLowerCase().includes(q)).slice(0,8);
+  if(!matches.length){
+    el.innerHTML = `<div class="step">New product — not currently in your stock. Fill in the details below and it'll be saved as new.</div>`;
+    return;
+  }
+  el.innerHTML = `<div class="suggest-box">` + matches.map(s=>{
+    const boxes = Math.floor(s.qty/(s.piecesPerBox||1));
+    return `
+    <div class="list-row" style="cursor:pointer;" onclick="pickExistingStock('${formType}',${idx},'${s.id}')">
+      <div><div class="li-main">${s.itemName}${s.batch?' • '+s.batch:''}</div><div class="li-sub">${s.category} • ${boxes} box(es) in stock • ${s.sku}</div></div>
+      <div class="li-right" style="color:var(--gold-700, #B8860B);">Use this ✓</div>
+    </div>`;
+  }).join('') + `</div>`;
+}
+function pickExistingStock(formType, idx, stockId){
+  const s = db.stock.find(x=>x.id===stockId);
+  if(!s) return;
+  const draft = formType==='purchase' ? purchaseDraft : openingStockDraft;
+  const it = draft.items[idx];
+  if(!it) return;
+  Object.assign(it, {
+    sku: s.sku, itemName: s.itemName, category: s.category, subcategory: s.subcategory||'',
+    material: s.material||'', size: s.size||'', batch: s.batch||'', piecesPerBox: s.piecesPerBox||1,
+    gst: s.gst!=null ? s.gst : it.gst
+  });
+  if(formType==='purchase'){ it.brand = s.brand||it.brand; if(!it.mrp) it.mrp = s.mrp||0; }
+  else { if(!it.mrp) it.mrp = s.mrp||0; }
+  render();
+}
+window.showStockSuggestions = showStockSuggestions;
+window.pickExistingStock = pickExistingStock;
 /* GST math: 'excluded' = rate is pre-tax, GST added on top. 'included' = rate already
    has GST inside it (like a retail MRP), so GST is extracted from within instead. */
 function gstBreakdown(amount, gstPct, mode){
@@ -499,6 +539,7 @@ function render(){
   else if(currentScreen==='purchase') main.innerHTML = renderPurchase();
   else if(currentScreen==='sales') main.innerHTML = renderSales();
   else if(currentScreen==='stock') main.innerHTML = renderStock();
+  else if(currentScreen==='findDuplicates') main.innerHTML = renderFindDuplicates();
   else if(currentScreen==='reports') main.innerHTML = renderReports();
 }
 
@@ -716,7 +757,9 @@ function renderPurchase(){
     return `
     <div class="item-row-card">
       <button class="rm" onclick="removePurchaseItem(${idx})">×</button>
-      <div class="field"><label>Product name</label><input value="${it.itemName}" oninput="updatePurchaseItem(${idx},'itemName',this.value)" placeholder="e.g. Glossy Wall Tile 12x18"/></div>
+      <div class="field"><label>Product name</label><input value="${it.itemName}" oninput="updatePurchaseItem(${idx},'itemName',this.value); showStockSuggestions('purchase',${idx},this.value);" placeholder="e.g. Glossy Wall Tile 12x18"/></div>
+      ${it.sku ? `<div class="step" id="stockLinked_purchase_${idx}">✓ Linked to your existing product — SKU ${it.sku}. This entry will add to it, not create a duplicate.</div>` : ''}
+      <div id="stockSuggest_purchase_${idx}"></div>
       <div class="row2">
         <div class="field"><label>Category</label>
           <select onchange="updatePurchaseItem(${idx},'category',this.value); updatePurchaseItem(${idx},'subcategory',''); render();">
@@ -742,7 +785,7 @@ function renderPurchase(){
         <div class="field"><label>Brand (optional)</label><input value="${it.brand}" oninput="updatePurchaseItem(${idx},'brand',this.value)"/></div>
       </div>
       <div class="row2">
-        <div class="field"><label>Batch/Shade (optional)</label><input value="${it.batch}" oninput="updatePurchaseItem(${idx},'batch',this.value)"/></div>
+        <div class="field"><label>Batch/Shade (optional)</label><input value="${it.batch}" oninput="updatePurchaseItem(${idx},'batch',this.value);"/></div>
         <div class="field"><label>Pieces per box</label><input type="number" value="${it.piecesPerBox||''}" placeholder="0" oninput="updatePurchaseItem(${idx},'piecesPerBox',this.value)"/></div>
       </div>
       <div class="row2">
@@ -839,6 +882,7 @@ function removePurchaseItem(idx){ purchaseDraft.items.splice(idx,1); render(); }
 function updatePurchaseItem(idx,field,val){
   const strFields = ['itemName','category','subcategory','material','size','brand','batch'];
   purchaseDraft.items[idx][field] = strFields.includes(field) ? val : Number(val);
+  if(field==='itemName' && purchaseDraft.items[idx].sku) purchaseDraft.items[idx].sku = '';
 }
 function savePurchase(){
   if(CLOUD_MODE){ savePurchaseCloud(); return; }
@@ -1052,7 +1096,9 @@ function renderOpeningStock(){
     return `
     <div class="item-row-card">
       <button class="rm" onclick="removeOpeningStockItem(${idx})">×</button>
-      <div class="field"><label>Product name</label><input value="${it.itemName}" oninput="updateOpeningStockItem(${idx},'itemName',this.value)"/></div>
+      <div class="field"><label>Product name</label><input value="${it.itemName}" oninput="updateOpeningStockItem(${idx},'itemName',this.value); showStockSuggestions('opening',${idx},this.value);"/></div>
+      ${it.sku ? `<div class="step" id="stockLinked_opening_${idx}">✓ Linked to your existing product — SKU ${it.sku}. This entry will add to it, not create a duplicate.</div>` : ''}
+      <div id="stockSuggest_opening_${idx}"></div>
       <div class="row2">
         <div class="field"><label>Category</label>
           <select onchange="updateOpeningStockItem(${idx},'category',this.value); updateOpeningStockItem(${idx},'subcategory',''); render();">
@@ -1075,7 +1121,7 @@ function renderOpeningStock(){
       </div>` : ''}
       <div class="row2">
         <div class="field"><label>Size</label><input value="${it.size}" oninput="updateOpeningStockItem(${idx},'size',this.value)"/></div>
-        <div class="field"><label>Batch/Shade (optional)</label><input value="${it.batch}" oninput="updateOpeningStockItem(${idx},'batch',this.value)"/></div>
+        <div class="field"><label>Batch/Shade (optional)</label><input value="${it.batch}" oninput="updateOpeningStockItem(${idx},'batch',this.value);"/></div>
       </div>
       <div class="row2">
         <div class="field"><label>Pieces per box</label><input type="number" value="${it.piecesPerBox||''}" placeholder="0" oninput="updateOpeningStockItem(${idx},'piecesPerBox',this.value)"/></div>
@@ -1128,6 +1174,7 @@ function removeOpeningStockItem(idx){ openingStockDraft.items.splice(idx,1); ren
 function updateOpeningStockItem(idx,field,val){
   const strFields = ['itemName','category','subcategory','material','size','batch'];
   openingStockDraft.items[idx][field] = strFields.includes(field) ? val : Number(val);
+  if(field==='itemName' && openingStockDraft.items[idx].sku) openingStockDraft.items[idx].sku = '';
 }
 function applyOpeningStockItemsLocal(items){
   const valid = items.filter(it=>it.itemName && String(it.itemName).trim() && it.category && Number(it.qty)>0 && Number(it.piecesPerBox)>0 && Number(it.cost)>0);
@@ -1170,7 +1217,7 @@ function saveOpeningStock(){
 async function applyOpeningStockItemsCloud(items){
   const valid = items.filter(it=>it.itemName && String(it.itemName).trim() && it.category && Number(it.qty)>0 && Number(it.piecesPerBox)>0 && Number(it.cost)>0);
   if(!valid.length) return valid;
-  for(const it of valid){ if(!it.sku) it.sku = await nextSkuCloud(it.category); }
+  for(const it of valid){ if(!it.sku) it.sku = (findStockRow(it.itemName, it.batch)||{}).sku || await nextSkuCloud(it.category); }
   const CHUNK_SIZE = 40; // stays well under Firestore's per-transaction limits
   for(let start=0; start<valid.length; start+=CHUNK_SIZE){
     const chunk = valid.slice(start, start+CHUNK_SIZE);
@@ -1604,7 +1651,7 @@ window.saveSaleReturn = saveSaleReturn;
 /* ===================== STOCK ===================== */
 let stockFilter = 'all';
 function renderStock(){
-  let rows = db.stock.filter(s=>s.qty>0);
+  let rows = db.stock.slice();
   if(stockFilter==='low') rows = rows.filter(s=>s.qty>0 && s.qty<=lowStockThresholdFor(s));
   const q = (document.getElementById('stockSearch')?.value||'').toLowerCase();
   if(q) rows = rows.filter(s=>s.itemName.toLowerCase().includes(q));
@@ -1624,9 +1671,64 @@ function renderStock(){
       <button class="${stockFilter==='all'?'active':''}" onclick="stockFilter='all';render()">All</button>
       <button class="${stockFilter==='low'?'active':''}" onclick="stockFilter='low';render()">Low stock</button>
     </div>
+    ${isOwner() ? `<button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('findDuplicates')">🔍 Find duplicate or hidden products</button>` : ''}
     <div class="card">${rowsHtml || `<div class="empty"><div class="e-icon">📭</div>No stock items match.</div>`}</div>
   `;
 }
+function renderFindDuplicates(){
+  if(!isOwner()) return ownerOnlyNotice();
+  const norm = s => (s.itemName||'').trim().toLowerCase()+'|'+(s.batch||'').trim().toLowerCase();
+  const groups = {};
+  db.stock.forEach(s=>{ const k = norm(s); if(!groups[k]) groups[k]=[]; groups[k].push(s); });
+  const dupGroups = Object.values(groups).filter(g=>g.length>1);
+  const hidden = db.stock.filter(s=> !(s.qty>0) );
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('stock')">← Back to Stock</button>
+    <div class="card">
+      <h3>Duplicate products (${dupGroups.length})</h3>
+      <div class="step">Same name and batch appearing as more than one entry — almost always caused by entering the same product twice.</div>
+      ${dupGroups.length ? dupGroups.map(g=>`
+        <div class="list-row" style="flex-direction:column;align-items:flex-start;gap:6px;border-bottom:1px solid var(--line);padding:10px 0;">
+          <div class="li-main">${g[0].itemName}${g[0].batch?' • '+g[0].batch:''}</div>
+          ${g.map(s=>`<div class="li-sub">SKU ${s.sku} — ${s.qty} pc${s.qty!==1?'s':''}${s.qty<=0?' (hidden — zero qty)':''}</div>`).join('')}
+          <button class="btn btn-ghost" onclick="mergeDuplicates('${g.map(s=>s.id).join(',')}')">Merge these into one</button>
+        </div>
+      `).join('') : `<div class="empty">No duplicates found.</div>`}
+    </div>
+    <div class="card">
+      <h3>Hidden zero-quantity items (${hidden.length})</h3>
+      <div class="step">These don't show in the normal Stock list or search since their quantity is 0 — listed here so nothing is silently lost from view.</div>
+      ${hidden.length ? hidden.map(s=>`
+        <div class="list-row" style="cursor:pointer;" onclick="openStockDetail('${s.id}')">
+          <div><div class="li-main">${s.itemName}</div><div class="li-sub">${s.category} › ${s.subcategory||'—'} • SKU ${s.sku}</div></div>
+          <div class="li-right">0</div>
+        </div>
+      `).join('') : `<div class="empty">None.</div>`}
+    </div>`;
+}
+function mergeDuplicates(idsCsv){
+  const ids = idsCsv.split(',');
+  const items = ids.map(id=>db.stock.find(s=>s.id===id)).filter(Boolean);
+  if(items.length<2) return;
+  const totalQty = items.reduce((a,s)=>a+(s.qty||0),0);
+  const primary = items.reduce((a,b)=> (b.qty||0)>(a.qty||0) ? b : a); // keep the one with the most stock as the surviving record
+  const others = items.filter(s=>s.id!==primary.id);
+  if(!confirm(`Merge ${items.length} entries of "${primary.itemName}" into one?\n\nTotal combined quantity: ${totalQty} pieces\nThe others will be zeroed out (kept for history, not deleted) — this only fixes the display, not any past bills.`)) return;
+  logAudit('Duplicate stock merged', primary.itemName+' • '+items.length+' entries → '+totalQty+' pieces');
+  primary.qty = totalQty;
+  others.forEach(s=> s.qty = 0);
+  if(CLOUD_MODE){
+    fsDB.collection('stock').doc(primary.id).update({qty: totalQty}).catch(e=>alert('Could not save: '+e.message));
+    others.forEach(s=> fsDB.collection('stock').doc(s.id).update({qty: 0}).catch(e=>console.error(e)));
+  } else {
+    saveDB(db);
+  }
+  syncCatalogItem(primary.id);
+  others.forEach(s=> syncCatalogItem(s.id));
+  alert('Merged. Combined quantity is now on SKU '+primary.sku+'.');
+  render();
+}
+window.mergeDuplicates = mergeDuplicates;
 function openStockDetail(stockId){
   billDetailCtx = {stockId};
   goTo('stockDetail');
@@ -1749,7 +1851,21 @@ function renderStockDetail(){
           Mark as "Coming Soon" on the public site (overrides stock-based status)
         </label>
       </div>
-      <div class="step">Current public status: <b>${computeCatalogStatus(s)}</b></div>
+      <div class="field">
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" ${s.featured?'checked':''} onchange="toggleFeatured('${s.id}', this.checked)" ${!(s.catalogPhotos||[]).length?'disabled':''}/>
+          ⭐ Feature this photo in the "${s.category||'category'}" showcase on the public site
+        </label>
+        ${!(s.catalogPhotos||[]).length ? `<div class="step">Upload a photo above first to enable this.</div>` : ''}
+      </div>
+      <div class="field">
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" ${s.discontinued?'checked':''} onchange="toggleDiscontinued('${s.id}', this.checked)"/>
+          🚫 Discontinued — hide this product from the public site entirely
+        </label>
+        <div class="step">This only affects the public site. It always stays visible here in Stock, no matter what.</div>
+      </div>
+      <div class="step">Current public status: <b>${s.discontinued ? 'Hidden from public site' : computeCatalogStatus(s)}</b></div>
     </div>
     ` : ''}
     <div class="card">
@@ -2420,7 +2536,7 @@ async function savePurchaseCloud(){
   const valid = purchaseDraft.items.filter(it=>it.itemName.trim() && it.category && Number(it.qty)>0 && Number(it.piecesPerBox)>0);
   if(!valid.length){ alert('Add at least one item with a name, category, pieces-per-box and quantity.'); return; }
   try{
-    for(const it of valid){ if(!it.sku) it.sku = await nextSkuCloud(it.category); }
+    for(const it of valid){ if(!it.sku) it.sku = (findStockRow(it.itemName, it.batch)||{}).sku || await nextSkuCloud(it.category); }
     const lineAmounts = valid.map(it=>Number(it.qty)*Number(it.rate));
     const lineTaxables = valid.map((it,i)=>gstBreakdown(lineAmounts[i], Number(it.gst), purchaseDraft.gstMode).taxable);
     const billedTaxableTotal = lineTaxables.reduce((a,v)=>a+v,0);
@@ -2618,10 +2734,14 @@ function syncCatalogItem(sku){
   if(!CLOUD_MODE || !fsDB) return;   // catalog only makes sense with cloud sync on
   const s = db.stock.find(x=>x.id===sku);
   if(!s) return;
+  if(s.discontinued){
+    fsDB.collection('catalog').doc(sku).delete().catch(e=>console.error('catalog sync (remove)', e));
+    return;
+  }
   const entry = {
     itemName: s.itemName||'', category: s.category||'', subcategory: s.subcategory||'',
     material: s.material||'', size: s.size||'', batch: s.batch||'',
-    status: computeCatalogStatus(s), photos: s.catalogPhotos||[],
+    status: computeCatalogStatus(s), photos: s.catalogPhotos||[], featured: !!s.featured,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   fsDB.collection('catalog').doc(sku).set(entry, {merge:true}).catch(e=>console.error('catalog sync', e));
@@ -2741,6 +2861,42 @@ function toggleComingSoon(sku, checked){
   syncCatalogItem(sku);
   render();
 }
+function toggleFeatured(sku, checked){
+  const s = db.stock.find(x=>x.id===sku);
+  if(!s) return;
+  s.featured = checked;
+  if(CLOUD_MODE){
+    fsDB.collection('stock').doc(sku).update({featured: checked}).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    saveDB(db);
+  }
+  syncCatalogItem(sku);
+  // Only one photo represents a category on the public site — unfeature any
+  // other product in the same category so there's no ambiguity about which wins.
+  if(checked){
+    db.stock.filter(x=>x.id!==sku && x.category===s.category && x.featured).forEach(other=>{
+      other.featured = false;
+      if(CLOUD_MODE) fsDB.collection('stock').doc(other.id).update({featured:false}).catch(e=>console.error(e));
+      syncCatalogItem(other.id);
+    });
+    if(!CLOUD_MODE) saveDB(db);
+  }
+  render();
+}
+window.toggleFeatured = toggleFeatured;
+function toggleDiscontinued(sku, checked){
+  const s = db.stock.find(x=>x.id===sku);
+  if(!s) return;
+  s.discontinued = checked;
+  if(CLOUD_MODE){
+    fsDB.collection('stock').doc(sku).update({discontinued: checked}).catch(e=>alert('Could not save: '+e.message));
+  } else {
+    saveDB(db);
+  }
+  syncCatalogItem(sku);
+  render();
+}
+window.toggleDiscontinued = toggleDiscontinued;
 window.handlePhotoUpload = handlePhotoUpload;
 window.removeProductPhoto = removeProductPhoto;
 window.toggleComingSoon = toggleComingSoon;
