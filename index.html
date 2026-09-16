@@ -280,7 +280,10 @@ function nextId(prefix){
   db.seqs[prefix] += 1;
   return id;
 }
-function formatBillNo(kind, n){ return (kind==='purchase'?'HWP':'HWS') + String(n).padStart(5,'0'); }
+function formatBillNo(kind, n){
+  const prefixes = {purchase:'HWP', sale:'HWS', quote:'HWQ', opening:'HWO'};
+  return (prefixes[kind]||'HWX') + String(n).padStart(5,'0');
+}
 function nextBillNo(kind){
   const key = 'HWNO_'+kind;
   if(!db.seqs[key]) db.seqs[key] = 1;
@@ -509,14 +512,20 @@ const titles = {
   auditLog:['Activity log','Who did what, and when'],
   users:['Users & roles','Who can see what'],
   reminders:['Payment reminders','Overdue customer balances'],
-  printPreview:['Document','Preview & print']
+  printPreview:['Document','Preview & print'],
+  findDuplicates:['Stock check','Duplicates, hidden items & missing products'],
+  openingStockHistory:['Opening stock history','Every opening stock entry you saved'],
+  fullLedger:['Full Ledger','Every purchase, sale & opening stock entry']
 };
 
 function setScreen(name){
   currentScreen = name;
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.screen===name));
-  document.getElementById('screenTitle').textContent = titles[name][0];
-  document.getElementById('screenNote').textContent = titles[name][1];
+  // Fall back rather than throw — a missing title entry used to break navigation
+  // to that screen entirely, with no visible error.
+  const t = titles[name] || [name, ''];
+  document.getElementById('screenTitle').textContent = t[0];
+  document.getElementById('screenNote').textContent = t[1];
   render();
 }
 document.querySelectorAll('.nav-btn').forEach(b=> b.addEventListener('click', ()=> setScreen(b.dataset.screen)));
@@ -559,6 +568,7 @@ function render(){
   else if(currentScreen==='stock') main.innerHTML = renderStock();
   else if(currentScreen==='findDuplicates') main.innerHTML = renderFindDuplicates();
   else if(currentScreen==='openingStockHistory') main.innerHTML = renderOpeningStockHistory();
+  else if(currentScreen==='fullLedger') main.innerHTML = renderFullLedger();
   else if(currentScreen==='reports') main.innerHTML = renderReports();
 }
 
@@ -617,6 +627,7 @@ function renderDashboard(){
       <button class="btn btn-ghost" onclick="setScreen('addExpense')">💵 Add Expense</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('pnl')">📊 Profit &amp; Loss</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('shopSettings')">🏪 Shop details (for invoices)</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('fullLedger')">📚 Full Ledger (all bills)</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="syncAllToCatalog()">🌐 Sync catalog to public site now</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('staffList')">👷 Staff Ledger</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('auditLog')">📋 Activity log</button>
@@ -1266,10 +1277,11 @@ function saveOpeningStock(){
   if(CLOUD_MODE){ saveOpeningStockCloud(); return; }
   const valid = applyOpeningStockItemsLocal(openingStockDraft.items);
   if(!valid.length){ alert('Add at least one item.'); return; }
-  db.openingStock.push({id: nextId('OPS'), date:todayStr(), items:valid});
+  const openingNo = nextBillNo('opening');
+  db.openingStock.push({id: nextId('OPS'), openingNo, date:todayStr(), items:valid});
   saveDB(db);
   openingStockDraft = {items:[]};
-  alert('Opening stock added — all '+valid.length+' item(s) saved.');
+  alert('Opening stock '+openingNo+' added — all '+valid.length+' item(s) saved.');
   setScreen('stock');
 }
 async function applyOpeningStockItemsCloud(items){
@@ -1301,7 +1313,8 @@ async function applyOpeningStockItemsCloud(items){
       });
     });
   }
-  await fsDB.collection('openingStock').doc().set({date:todayStr(), items:valid, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+  const openingNo = await nextBillNoCloud('opening');
+  await fsDB.collection('openingStock').doc().set({openingNo, date:todayStr(), items:valid, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
   valid.forEach(it=> syncCatalogItem(it.sku));
   return valid;
 }
@@ -1778,11 +1791,70 @@ function renderOpeningStockHistory(){
       <div class="step">Every opening-stock entry you've saved, with the items recorded in each. Use this to confirm exactly what went in.</div>
       ${entries.length ? entries.map(o=>`
         <div style="border-bottom:1px solid var(--line);padding:12px 0;">
-          <div class="li-main">${o.date||''} — ${(o.items||[]).length} item(s)</div>
+          <div class="li-main">${o.openingNo||'(no number)'} — ${o.date||''} — ${(o.items||[]).length} item(s)</div>
           ${(o.items||[]).map(it=>`<div class="li-sub">• ${it.itemName}${it.batch?' ('+it.batch+')':''} — ${it.qty} box(es) @ ${fmt(it.cost)}</div>`).join('')}
         </div>
       `).join('') : `<div class="empty">No opening stock entries recorded.</div>`}
     </div>`;
+}
+let ledgerTab = 'purchase';
+function renderFullLedger(){
+  if(!isOwner()) return ownerOnlyNotice();
+  const q = (document.getElementById('ledgerSearch')?.value||'').trim().toLowerCase();
+
+  let body = '';
+  if(ledgerTab==='purchase'){
+    let rows = (db.purchases||[]).slice().sort((a,b)=> (a.date<b.date?1:-1));
+    if(q) rows = rows.filter(p=> (p.billNo||'').toLowerCase().includes(q) || (p.supplier||'').toLowerCase().includes(q) || (p.supplierBillNo||'').toLowerCase().includes(q));
+    body = rows.length ? rows.map(p=>`
+      <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('purchase','${p.id}')">
+        <div>
+          <div class="li-main">${p.billNo||p.id}</div>
+          <div class="li-sub">${p.date} • ${p.supplier||'Unknown supplier'}${p.supplierBillNo?' • their bill: '+p.supplierBillNo:''}</div>
+          <div class="li-sub">${(p.items||[]).length} item(s)</div>
+        </div>
+        <div class="li-right">${fmt((p.totalAmount||0)+(p.totalGst||0)+(p.additionalChargesTotal||0))}</div>
+      </div>`).join('') : `<div class="empty">No purchase bills${q?' match that search':''}.</div>`;
+  }
+  else if(ledgerTab==='sale'){
+    let rows = (db.sales||[]).slice().sort((a,b)=> (a.date<b.date?1:-1));
+    if(q) rows = rows.filter(s=> (s.billNo||'').toLowerCase().includes(q) || (s.customer||'').toLowerCase().includes(q));
+    body = rows.length ? rows.map(s=>`
+      <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('sale','${s.id}')">
+        <div>
+          <div class="li-main">${s.billNo||s.id}</div>
+          <div class="li-sub">${s.date} • ${s.customer||'Walk-in'}</div>
+          <div class="li-sub">${(s.items||[]).length} item(s)</div>
+        </div>
+        <div class="li-right">${fmt(s.totalAmount||0)}</div>
+      </div>`).join('') : `<div class="empty">No sale bills${q?' match that search':''}.</div>`;
+  }
+  else {
+    let rows = (db.openingStock||[]).slice().sort((a,b)=> (a.date<b.date?1:-1));
+    if(q) rows = rows.filter(o=> (o.openingNo||'').toLowerCase().includes(q) || (o.items||[]).some(it=>(it.itemName||'').toLowerCase().includes(q)));
+    body = rows.length ? rows.map(o=>{
+      const value = (o.items||[]).reduce((a,it)=> a + (Number(it.qty)||0)*(Number(it.cost)||0), 0);
+      return `
+      <div style="border-bottom:1px solid var(--line);padding:12px 0;">
+        <div style="display:flex;justify-content:space-between;">
+          <div class="li-main">${o.openingNo||'(no number)'}</div>
+          <div class="li-right">${fmt(value)}</div>
+        </div>
+        <div class="li-sub">${o.date||''} • ${(o.items||[]).length} item(s)</div>
+        ${(o.items||[]).map(it=>`<div class="li-sub">• ${it.itemName}${it.batch?' ('+it.batch+')':''} — ${it.qty} box(es) @ ${fmt(it.cost)}</div>`).join('')}
+      </div>`;
+    }).join('') : `<div class="empty">No opening stock entries${q?' match that search':''}.</div>`;
+  }
+
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
+    <div class="segment">
+      <button class="${ledgerTab==='purchase'?'active':''}" onclick="ledgerTab='purchase';render()">Purchase</button>
+      <button class="${ledgerTab==='sale'?'active':''}" onclick="ledgerTab='sale';render()">Sale</button>
+      <button class="${ledgerTab==='opening'?'active':''}" onclick="ledgerTab='opening';render()">Opening stock</button>
+    </div>
+    <div class="field"><input id="ledgerSearch" value="${q}" placeholder="Search bill no, party or product..." oninput="render()"/></div>
+    <div class="card">${body}</div>`;
 }
 function renderFindDuplicates(){
   if(!isOwner()) return ownerOnlyNotice();
