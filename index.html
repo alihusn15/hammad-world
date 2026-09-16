@@ -558,6 +558,7 @@ function render(){
   else if(currentScreen==='sales') main.innerHTML = renderSales();
   else if(currentScreen==='stock') main.innerHTML = renderStock();
   else if(currentScreen==='findDuplicates') main.innerHTML = renderFindDuplicates();
+  else if(currentScreen==='openingStockHistory') main.innerHTML = renderOpeningStockHistory();
   else if(currentScreen==='reports') main.innerHTML = renderReports();
 }
 
@@ -903,9 +904,10 @@ function updatePurchaseItem(idx,field,val){
   if(field==='itemName' && purchaseDraft.items[idx].sku) purchaseDraft.items[idx].sku = '';
 }
 function savePurchase(){
+  if(!validatePurchaseRows(purchaseDraft.items)) return;
   if(CLOUD_MODE){ savePurchaseCloud(); return; }
   const valid = purchaseDraft.items.filter(it=>it.itemName.trim() && it.category && Number(it.qty)>0 && Number(it.piecesPerBox)>0);
-  if(!valid.length){ alert('Add at least one item with a name, category, pieces-per-box and quantity.'); return; }
+  if(!valid.length){ alert('Add at least one item.'); return; }
   const id = nextId('PUR');
   const billNo = nextBillNo('purchase');
   let totalAmount=0, totalGst=0;
@@ -1222,14 +1224,52 @@ function applyOpeningStockItemsLocal(items){
   valid.forEach(it=> syncCatalogItem(it.sku));
   return valid;
 }
+function validatePurchaseRows(items){
+  const problems = [];
+  items.forEach((it,i)=>{
+    const missing = [];
+    if(!it.itemName || !String(it.itemName).trim()) missing.push('product name');
+    if(!it.category) missing.push('category');
+    if(!(Number(it.qty)>0)) missing.push('quantity');
+    if(!(Number(it.piecesPerBox)>0)) missing.push('pieces per box');
+    if(missing.length) problems.push('Row '+(i+1)+(it.itemName?' ("'+String(it.itemName).trim()+'")':'')+': missing '+missing.join(', '));
+  });
+  if(problems.length){
+    alert('Nothing was saved — '+problems.length+' row(s) are incomplete:\n\n'+problems.join('\n')+'\n\nFill these in (or remove the row) and save again. Every row must be complete so none get lost.');
+    return false;
+  }
+  return true;
+}
+/* Rows missing any required field used to be silently discarded on save — the
+   bill reported success while those products quietly never existed. This checks
+   first and names exactly what's wrong, so a save either stores every row or
+   stops and tells you why. */
+function validateOpeningStockRows(items){
+  const problems = [];
+  items.forEach((it,i)=>{
+    const missing = [];
+    if(!it.itemName || !String(it.itemName).trim()) missing.push('product name');
+    if(!it.category) missing.push('category');
+    if(!(Number(it.qty)>0)) missing.push('quantity');
+    if(!(Number(it.piecesPerBox)>0)) missing.push('pieces per box');
+    if(!(Number(it.cost)>0)) missing.push('cost per box');
+    if(missing.length) problems.push('Row '+(i+1)+(it.itemName?' ("'+String(it.itemName).trim()+'")':'')+': missing '+missing.join(', '));
+  });
+  if(problems.length){
+    alert('Nothing was saved — '+problems.length+' row(s) are incomplete:\n\n'+problems.join('\n')+'\n\nFill these in (or remove the row) and save again. Every row must be complete so none get lost.');
+    return false;
+  }
+  return true;
+}
 function saveOpeningStock(){
+  if(!validateOpeningStockRows(openingStockDraft.items)) return;
   if(CLOUD_MODE){ saveOpeningStockCloud(); return; }
   const valid = applyOpeningStockItemsLocal(openingStockDraft.items);
-  if(!valid.length){ alert('Add at least one item with a name, category, pieces-per-box, quantity and cost.'); return; }
+  if(!valid.length){ alert('Add at least one item.'); return; }
   db.openingStock.push({id: nextId('OPS'), date:todayStr(), items:valid});
   saveDB(db);
   openingStockDraft = {items:[]};
-  alert('Opening stock added.');
+  alert('Opening stock added — all '+valid.length+' item(s) saved.');
   setScreen('stock');
 }
 async function applyOpeningStockItemsCloud(items){
@@ -1268,9 +1308,9 @@ async function applyOpeningStockItemsCloud(items){
 async function saveOpeningStockCloud(){
   try{
     const saved = await applyOpeningStockItemsCloud(openingStockDraft.items);
-    if(!saved.length){ alert('Add at least one item with a name, category, pieces-per-box, quantity and cost.'); return; }
+    if(!saved.length){ alert('Add at least one item.'); return; }
     openingStockDraft = {items:[]};
-    alert('Opening stock added to cloud. Stock updated on every device.');
+    alert('Opening stock added to cloud — all '+saved.length+' item(s) saved. Stock updated on every device.');
     setScreen('stock');
   }catch(e){ console.error(e); alert('Could not save: '+e.message); }
 }
@@ -1689,7 +1729,8 @@ function renderStock(){
       <button class="${stockFilter==='all'?'active':''}" onclick="stockFilter='all';render()">All</button>
       <button class="${stockFilter==='low'?'active':''}" onclick="stockFilter='low';render()">Low stock</button>
     </div>
-    ${isOwner() ? `<button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('findDuplicates')">🔍 Find duplicate or hidden products</button>` : ''}
+    ${isOwner() ? `<button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('findDuplicates')">🔍 Find duplicate or hidden products</button>
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('openingStockHistory')">📋 Opening stock history</button>` : ''}
     <div class="card">${rowsHtml || `<div class="empty"><div class="e-icon">📭</div>No stock items match.</div>`}</div>
   `;
 }
@@ -1727,6 +1768,22 @@ async function restoreOrphan(idx){
   render();
 }
 window.restoreOrphan = restoreOrphan;
+function renderOpeningStockHistory(){
+  if(!isOwner()) return ownerOnlyNotice();
+  const entries = (db.openingStock||[]).slice().sort((a,b)=> (a.date<b.date?1:-1));
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('stock')">← Back to Stock</button>
+    <div class="card">
+      <h3>Opening stock entries (${entries.length})</h3>
+      <div class="step">Every opening-stock entry you've saved, with the items recorded in each. Use this to confirm exactly what went in.</div>
+      ${entries.length ? entries.map(o=>`
+        <div style="border-bottom:1px solid var(--line);padding:12px 0;">
+          <div class="li-main">${o.date||''} — ${(o.items||[]).length} item(s)</div>
+          ${(o.items||[]).map(it=>`<div class="li-sub">• ${it.itemName}${it.batch?' ('+it.batch+')':''} — ${it.qty} box(es) @ ${fmt(it.cost)}</div>`).join('')}
+        </div>
+      `).join('') : `<div class="empty">No opening stock entries recorded.</div>`}
+    </div>`;
+}
 function renderFindDuplicates(){
   if(!isOwner()) return ownerOnlyNotice();
 
