@@ -305,21 +305,39 @@ async function nextBillNoCloud(kind){
 async function nextSkuCloud(category){
   const prefix = (category||'GEN').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase() || 'GEN';
   const counterRef = fsDB.collection('meta').doc('skuCounter_'+prefix);
+  // A stock document is stored under its SKU, so handing out an SKU that is
+  // already in use would silently OVERWRITE that existing product. The counter
+  // alone isn't enough to prevent this (local mode keeps its own separate
+  // counter, and imported backups carry their own SKUs), so we also skip past
+  // anything already present before committing.
+  const used = new Set(db.stock.map(s=>s.sku).filter(Boolean));
   return await fsDB.runTransaction(async (tx)=>{
     const snap = await tx.get(counterRef);
-    const current = snap.exists ? (snap.data().seq||0) : 0;
-    const next = current+1;
+    let next = (snap.exists ? (snap.data().seq||0) : 0) + 1;
+    let candidate = prefix+'-'+String(next).padStart(5,'0');
+    let guard = 0;
+    while(used.has(candidate) && guard < 10000){
+      next++; guard++;
+      candidate = prefix+'-'+String(next).padStart(5,'0');
+    }
     tx.set(counterRef, {seq: next}, {merge:true});
-    return prefix+'-'+String(next).padStart(5,'0');
+    return candidate;
   });
 }
 function nextSku(category){
   const prefix = (category||'GEN').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase() || 'GEN';
   const key = 'SKU_'+prefix;
   if(!db.seqs[key]) db.seqs[key] = 1;
-  const n = db.seqs[key];
-  db.seqs[key] += 1;
-  return prefix+'-'+String(n).padStart(5,'0');
+  const used = new Set(db.stock.map(s=>s.sku).filter(Boolean));
+  let n = db.seqs[key];
+  let candidate = prefix+'-'+String(n).padStart(5,'0');
+  let guard = 0;
+  while(used.has(candidate) && guard < 10000){
+    n++; guard++;
+    candidate = prefix+'-'+String(n).padStart(5,'0');
+  }
+  db.seqs[key] = n + 1;
+  return candidate;
 }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function fmt(n){ return '₹' + (Math.round((n||0)*100)/100).toLocaleString('en-IN'); }
@@ -1675,6 +1693,40 @@ function renderStock(){
     <div class="card">${rowsHtml || `<div class="empty"><div class="e-icon">📭</div>No stock items match.</div>`}</div>
   `;
 }
+let lastOrphanList = [];
+async function restoreOrphan(idx){
+  const o = lastOrphanList[idx];
+  if(!o || !o.detail) return;
+  const d = o.detail;
+  const netQty = Math.max(0, o.qty||0);
+  if(!confirm(`Restore "${o.itemName}" to Stock?\n\nRebuilt from its original bill(s), with ${netQty} piece(s) as recorded there.\n\nIMPORTANT: this is the quantity originally purchased. If any was sold before it went missing, correct the quantity afterwards using "Correct stock quantity" on the product.`)) return;
+  const sku = CLOUD_MODE ? await nextSkuCloud(d.category) : nextSku(d.category);
+  const rec = {
+    sku, itemName: (d.itemName||'').trim(), category: d.category||'', subcategory: d.subcategory||'',
+    material: d.material||'', size: d.size||'', brand: d.brand||'', batch: d.batch||'',
+    piecesPerBox: Number(d.piecesPerBox)||1,
+    purchaseRate: Number(d.rate)||Number(d.cost)||0,
+    avgCost: (Number(d.rate)||Number(d.cost)||0)/(Number(d.piecesPerBox)||1),
+    mrp: Number(d.mrp)||Number(d.rate)||0,
+    gst: Number(d.gst)||0,
+    qty: netQty
+  };
+  logAudit('Missing product restored', rec.itemName+' • '+netQty+' pieces • new SKU '+sku);
+  if(CLOUD_MODE){
+    try{
+      await fsDB.collection('stock').doc(sku).set(rec);
+      syncCatalogItem(sku);
+      alert('Restored. Please check the quantity is right — see the note about earlier sales.');
+    }catch(e){ alert('Could not restore: '+e.message); }
+  } else {
+    rec.id = sku;
+    db.stock.push(rec);
+    saveDB(db);
+    alert('Restored. Please check the quantity is right — see the note about earlier sales.');
+  }
+  render();
+}
+window.restoreOrphan = restoreOrphan;
 function renderFindDuplicates(){
   if(!isOwner()) return ownerOnlyNotice();
 
@@ -1687,7 +1739,9 @@ function renderFindDuplicates(){
     (p.items||[]).forEach(it=>{
       const key = (it.itemName||'').trim().toLowerCase()+'|'+(it.batch||'').trim().toLowerCase();
       if(!key.trim()||key==='|') return;
-      if(!entered[key]) entered[key] = {itemName:it.itemName, batch:it.batch, sku:it.sku, sources:[]};
+      if(!entered[key]) entered[key] = {detail:it, itemName:it.itemName, batch:it.batch, qty:0, sources:[]};
+      entered[key].detail = it;
+      entered[key].qty += ((Number(it.qty)||0) + (Number(it.freeQty)||0)) * (Number(it.piecesPerBox)||1);
       entered[key].sources.push('Purchase '+(p.billNo||p.id)+' ('+(p.date||'')+')');
     });
   });
@@ -1695,7 +1749,9 @@ function renderFindDuplicates(){
     (o.items||[]).forEach(it=>{
       const key = (it.itemName||'').trim().toLowerCase()+'|'+(it.batch||'').trim().toLowerCase();
       if(!key.trim()||key==='|') return;
-      if(!entered[key]) entered[key] = {itemName:it.itemName, batch:it.batch, sku:it.sku, sources:[]};
+      if(!entered[key]) entered[key] = {detail:it, itemName:it.itemName, batch:it.batch, qty:0, sources:[]};
+      entered[key].detail = it;
+      entered[key].qty += (Number(it.qty)||0) * (Number(it.piecesPerBox)||1);
       entered[key].sources.push('Opening stock ('+(o.date||'')+')');
     });
   });
@@ -1704,6 +1760,7 @@ function renderFindDuplicates(){
     const key = (e.itemName||'').trim().toLowerCase()+'|'+(e.batch||'').trim().toLowerCase();
     return !stockKeys.has(key);
   });
+  lastOrphanList = orphans;
   const norm = s => (s.itemName||'').trim().toLowerCase()+'|'+(s.batch||'').trim().toLowerCase();
   const groups = {};
   db.stock.forEach(s=>{ const k = norm(s); if(!groups[k]) groups[k]=[]; groups[k].push(s); });
@@ -1735,10 +1792,11 @@ function renderFindDuplicates(){
     <div class="card">
       <h3>Entered in a bill but missing from Stock (${orphans.length})</h3>
       <div class="step">Cross-checks every product recorded in a purchase or opening-stock entry against your current stock list. Anything here was definitely entered and saved, but has no stock row — the real "missing product" case.</div>
-      ${orphans.length ? orphans.map(o=>`
+      ${orphans.length ? orphans.map((o,oi)=>`
         <div class="list-row" style="flex-direction:column;align-items:flex-start;gap:4px;padding:10px 0;">
           <div class="li-main">${o.itemName}${o.batch?' • '+o.batch:''}</div>
           ${o.sources.map(src=>`<div class="li-sub">${src}</div>`).join('')}
+          <button class="btn btn-ghost" onclick="restoreOrphan(${oi})">Restore this product to Stock</button>
         </div>
       `).join('') : `<div class="empty">None — every product ever entered in a bill has a matching stock row.</div>`}
     </div>
