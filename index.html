@@ -515,7 +515,8 @@ const titles = {
   printPreview:['Document','Preview & print'],
   findDuplicates:['Stock check','Duplicates, hidden items & missing products'],
   openingStockHistory:['Opening stock history','Every opening stock entry you saved'],
-  fullLedger:['Full Ledger','Every purchase, sale & opening stock entry']
+  fullLedger:['Full Ledger','Every purchase, sale & opening stock entry'],
+  openingStockDetail:['Opening stock entry','View & edit this entry']
 };
 
 function setScreen(name){
@@ -569,6 +570,7 @@ function render(){
   else if(currentScreen==='findDuplicates') main.innerHTML = renderFindDuplicates();
   else if(currentScreen==='openingStockHistory') main.innerHTML = renderOpeningStockHistory();
   else if(currentScreen==='fullLedger') main.innerHTML = renderFullLedger();
+  else if(currentScreen==='openingStockDetail') main.innerHTML = renderOpeningStockDetail();
   else if(currentScreen==='reports') main.innerHTML = renderReports();
 }
 
@@ -1797,6 +1799,85 @@ function renderOpeningStockHistory(){
       `).join('') : `<div class="empty">No opening stock entries recorded.</div>`}
     </div>`;
 }
+let openingDetailCtx = null;
+function openOpeningStockDetail(id){
+  const o = (db.openingStock||[]).find(x=>x.id===id);
+  if(!o) return;
+  openingDetailCtx = {id, originalItems: JSON.parse(JSON.stringify(o.items||[]))};
+  setScreen('openingStockDetail');
+}
+window.openOpeningStockDetail = openOpeningStockDetail;
+function updateOpeningDetailItem(idx, field, val){
+  const o = (db.openingStock||[]).find(x=>x.id===openingDetailCtx.id);
+  if(!o || !o.items[idx]) return;
+  o.items[idx][field] = (field==='itemName'||field==='batch') ? val : Number(val);
+}
+window.updateOpeningDetailItem = updateOpeningDetailItem;
+function renderOpeningStockDetail(){
+  if(!isOwner()) return ownerOnlyNotice();
+  const o = (db.openingStock||[]).find(x=>x.id===openingDetailCtx?.id);
+  if(!o) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('fullLedger')">← Back</button>`;
+  const rows = (o.items||[]).map((it,idx)=>`
+    <div class="item-row-card">
+      <div class="li-main">${it.itemName}${it.batch?' • '+it.batch:''}</div>
+      <div class="li-sub">${it.category||''} ${it.subcategory?'› '+it.subcategory:''} • ${it.piecesPerBox||1} pcs/box</div>
+      <div class="row2">
+        <div class="field"><label>Quantity (boxes)</label><input type="number" value="${it.qty}" oninput="updateOpeningDetailItem(${idx},'qty',this.value)"/></div>
+        <div class="field"><label>Cost per box</label><input type="number" value="${it.cost}" oninput="updateOpeningDetailItem(${idx},'cost',this.value)"/></div>
+      </div>
+    </div>`).join('');
+  return `
+    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('fullLedger')">← Back to Ledger</button>
+    <div class="card">
+      <h3>${o.openingNo||'(no number)'}</h3>
+      <div class="step">${o.date||''} • ${(o.items||[]).length} item(s)</div>
+      <div class="step">Changing a quantity here adjusts the product's stock by the difference. Cost changes are recorded on this entry but do not recalculate average cost on past sales.</div>
+    </div>
+    <div class="card">
+      <h3>Items</h3>
+      ${rows || `<div class="empty">No items.</div>`}
+    </div>
+    <button class="btn btn-primary" onclick="saveOpeningStockEdits()">Save changes</button>`;
+}
+async function saveOpeningStockEdits(){
+  const o = (db.openingStock||[]).find(x=>x.id===openingDetailCtx?.id);
+  if(!o) return;
+  const orig = openingDetailCtx.originalItems || [];
+  // Work out the net stock change per product, so stock stays truthful.
+  const deltas = {};
+  (o.items||[]).forEach((it,i)=>{
+    const before = orig[i] ? (Number(orig[i].qty)||0)*(Number(orig[i].piecesPerBox)||1) : 0;
+    const after = (Number(it.qty)||0)*(Number(it.piecesPerBox)||1);
+    const s = db.stock.find(x=>x.sku===it.sku) || findStockRow(it.itemName, it.batch);
+    if(!s) return;
+    deltas[s.id] = (deltas[s.id]||0) + (after - before);
+  });
+  for(const [stockId, d] of Object.entries(deltas)){
+    const s = db.stock.find(x=>x.id===stockId);
+    if(s && (s.qty + d) < 0){ alert('This change would take "'+s.itemName+'" below zero stock. Adjust the quantity and try again.'); return; }
+  }
+  logAudit('Opening stock edited', (o.openingNo||o.id)+' • '+(o.items||[]).length+' item(s)');
+  if(CLOUD_MODE){
+    try{
+      await fsDB.collection('openingStock').doc(o.id).update({items: o.items});
+      for(const [stockId, d] of Object.entries(deltas)){
+        if(d===0) continue;
+        await fsDB.collection('stock').doc(stockId).update({qty: firebase.firestore.FieldValue.increment(d)});
+        syncCatalogItem(stockId);
+      }
+      alert('Saved. Stock adjusted to match.');
+    }catch(e){ alert('Could not save: '+e.message); return; }
+  } else {
+    Object.entries(deltas).forEach(([stockId,d])=>{
+      const s = db.stock.find(x=>x.id===stockId);
+      if(s) s.qty += d;
+    });
+    saveDB(db);
+    alert('Saved. Stock adjusted to match.');
+  }
+  setScreen('fullLedger');
+}
+window.saveOpeningStockEdits = saveOpeningStockEdits;
 let ledgerTab = 'purchase';
 function renderFullLedger(){
   if(!isOwner()) return ownerOnlyNotice();
@@ -1835,12 +1916,12 @@ function renderFullLedger(){
     body = rows.length ? rows.map(o=>{
       const value = (o.items||[]).reduce((a,it)=> a + (Number(it.qty)||0)*(Number(it.cost)||0), 0);
       return `
-      <div style="border-bottom:1px solid var(--line);padding:12px 0;">
+      <div style="border-bottom:1px solid var(--line);padding:12px 0;cursor:pointer;" onclick="openOpeningStockDetail('${o.id}')">
         <div style="display:flex;justify-content:space-between;">
           <div class="li-main">${o.openingNo||'(no number)'}</div>
           <div class="li-right">${fmt(value)}</div>
         </div>
-        <div class="li-sub">${o.date||''} • ${(o.items||[]).length} item(s)</div>
+        <div class="li-sub">${o.date||''} • ${(o.items||[]).length} item(s) — tap to view or edit</div>
         ${(o.items||[]).map(it=>`<div class="li-sub">• ${it.itemName}${it.batch?' ('+it.batch+')':''} — ${it.qty} box(es) @ ${fmt(it.cost)}</div>`).join('')}
       </div>`;
     }).join('') : `<div class="empty">No opening stock entries${q?' match that search':''}.</div>`;
