@@ -1677,6 +1677,33 @@ function renderStock(){
 }
 function renderFindDuplicates(){
   if(!isOwner()) return ownerOnlyNotice();
+
+  // Cross-check: every item that appears in a purchase or opening-stock record
+  // should have a matching stock row. Anything that doesn't is genuinely orphaned
+  // — the bill saved but the stock row is missing, which is the real "missing
+  // product" case as opposed to a display or duplicate issue.
+  const entered = {};
+  (db.purchases||[]).forEach(p=>{
+    (p.items||[]).forEach(it=>{
+      const key = (it.itemName||'').trim().toLowerCase()+'|'+(it.batch||'').trim().toLowerCase();
+      if(!key.trim()||key==='|') return;
+      if(!entered[key]) entered[key] = {itemName:it.itemName, batch:it.batch, sku:it.sku, sources:[]};
+      entered[key].sources.push('Purchase '+(p.billNo||p.id)+' ('+(p.date||'')+')');
+    });
+  });
+  (db.openingStock||[]).forEach(o=>{
+    (o.items||[]).forEach(it=>{
+      const key = (it.itemName||'').trim().toLowerCase()+'|'+(it.batch||'').trim().toLowerCase();
+      if(!key.trim()||key==='|') return;
+      if(!entered[key]) entered[key] = {itemName:it.itemName, batch:it.batch, sku:it.sku, sources:[]};
+      entered[key].sources.push('Opening stock ('+(o.date||'')+')');
+    });
+  });
+  const stockKeys = new Set(db.stock.map(s=>(s.itemName||'').trim().toLowerCase()+'|'+(s.batch||'').trim().toLowerCase()));
+  const orphans = Object.values(entered).filter(e=>{
+    const key = (e.itemName||'').trim().toLowerCase()+'|'+(e.batch||'').trim().toLowerCase();
+    return !stockKeys.has(key);
+  });
   const norm = s => (s.itemName||'').trim().toLowerCase()+'|'+(s.batch||'').trim().toLowerCase();
   const groups = {};
   db.stock.forEach(s=>{ const k = norm(s); if(!groups[k]) groups[k]=[]; groups[k].push(s); });
@@ -1704,6 +1731,24 @@ function renderFindDuplicates(){
           <div class="li-right">0</div>
         </div>
       `).join('') : `<div class="empty">None.</div>`}
+    </div>
+    <div class="card">
+      <h3>Entered in a bill but missing from Stock (${orphans.length})</h3>
+      <div class="step">Cross-checks every product recorded in a purchase or opening-stock entry against your current stock list. Anything here was definitely entered and saved, but has no stock row — the real "missing product" case.</div>
+      ${orphans.length ? orphans.map(o=>`
+        <div class="list-row" style="flex-direction:column;align-items:flex-start;gap:4px;padding:10px 0;">
+          <div class="li-main">${o.itemName}${o.batch?' • '+o.batch:''}</div>
+          ${o.sources.map(src=>`<div class="li-sub">${src}</div>`).join('')}
+        </div>
+      `).join('') : `<div class="empty">None — every product ever entered in a bill has a matching stock row.</div>`}
+    </div>
+    <div class="card">
+      <h3>Totals (for reference)</h3>
+      <div class="list-row"><div class="li-main">Products in Stock</div><div class="li-right">${db.stock.length}</div></div>
+      <div class="list-row"><div class="li-main">Purchase bills recorded</div><div class="li-right">${(db.purchases||[]).length}</div></div>
+      <div class="list-row"><div class="li-main">Opening stock entries</div><div class="li-right">${(db.openingStock||[]).length}</div></div>
+      <div class="list-row"><div class="li-main">Distinct products across all bills</div><div class="li-right">${Object.keys(entered).length}</div></div>
+      <div class="step">If "Distinct products across all bills" is higher than "Products in Stock", the difference shows up in the section above.</div>
     </div>`;
 }
 function mergeDuplicates(idsCsv){
