@@ -3219,122 +3219,124 @@ function computeCatalogStatus(s){
   if(s.qty <= lowStockThresholdFor(s)) return 'Limited Stock';
   return 'In Stock';
 }
-const R2_PUBLIC_BASE = 'https://pub-ce2a5311865c4b9bbe03bb9309ba0a29.r2.dev/';
+/* ===================== R2 SETTINGS =====================
+   ⚠️ WHEN YOUR CUSTOM DOMAIN IS READY: change R2_PUBLIC_BASE below to it,
+   e.g. 'https://photos.hammadworld.com/'. Change the same line in the
+   customer site file, republish the catalog, and you are done. The r2.dev
+   address works but is rate-limited and NOT cached at Cloudflare's edge —
+   a custom domain fixes both. */
+const R2_PUBLIC_BASE   = 'https://pub-ce2a5311865c4b9bbe03bb9309ba0a29.r2.dev/';
+const R2_WORKER_URL    = 'https://hammad-world-photo-upload.hammadworld25.workers.dev';
+const R2_UPLOAD_SECRET = 'Wnb3zSQ4xvNDkTZKb-Q8CzyP7qVA42nGUzxSqAcviEE';
 
 /* ===================== PUBLIC CATALOG PUBLISHING =====================
-   The site used to read one document per product, so a visitor cost as many
-   reads as you had products — a few hundred products meant only ~250 visitors
-   a day on Firestore's free quota. Instead the catalog is published as a few
-   bundled documents:
+   The catalog is published as plain JSON files in R2, not Firestore.
 
-     catalogIndex/index        — category list + counts + cover photo (1 read)
-     catalogPages/<cat>-<n>    — the products of one category (read on demand)
+   Firestore's free tier allows 50,000 reads PER DAY. That is generous for
+   steady local traffic but fails exactly when it matters most: if a post goes
+   viral and thirty thousand people arrive within an hour, the quota is spent
+   and the site stops serving for the rest of the day. R2 has no daily quota
+   and, once served through a custom domain, is cached at Cloudflare's edge —
+   so a traffic spike is absorbed by the CDN instead of hitting any limit.
 
-   Photo URLs are stored as bare paths; the R2 domain and the "-thumb" suffix
-   are identical on every one and get rebuilt by the site, which cuts each
-   product from ~917 bytes to ~309 and keeps every page well inside Firestore's
-   1 MB per-document ceiling. Tiles can grow past one page without affecting
-   Ceiling or Sanitaryware, which stay a single small page each. */
-const CATALOG_PAGE_MAX = 1000;   // ~305KB per page — under a third of Firestore's 1MB cap, with room for longer names
+   Files written:
+     catalog/index.json        — categories, counts, cover photo, version stamp
+     catalog/<slug>-<n>.json   — the products of one category
+
+   Photo URLs are stored as bare paths; the domain is rebuilt by the site. */
+const CATALOG_PAGE_MAX = 1000;   // ~305KB per page, comfortably small to fetch
 
 function r2PathOf(url){
   if(!url) return '';
   const marker = '.r2.dev/';
   const i = url.indexOf(marker);
-  return i === -1 ? url : url.slice(i + marker.length);
-}
-function catalogEntryFor(s){
-  return {
-    sku: s.id,
-    n: s.itemName||'',
-    sub: s.subcategory||'',
-    m: s.material||'',
-    sz: s.size||'',
-    st: computeCatalogStatus(s),
-    f: !!s.featured,
-    p: (s.catalogPhotos||[]).map(r2PathOf),
-    t: (s.catalogThumbs||[]).map(r2PathOf)
-  };
+  if(i !== -1) return url.slice(i + marker.length);
+  // Once a custom domain is in use, strip that origin instead.
+  try{ const u = new URL(url); return u.pathname.replace(/^\//,''); }catch(e){ return url; }
 }
 function catalogSlug(cat){
   return (cat||'other').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'other';
 }
-
-/* Any stock change republishes that product's category page. Publishing is
-   whole-page rather than per-product because the page IS the unit the site
-   reads — a partial update would leave the page disagreeing with itself. */
-async function publishCatalogCategory(category){
-  if(!CLOUD_MODE || !fsDB || !category) return;
-  const slug = catalogSlug(category);
-  const live = db.stock.filter(s => s.category===category && !s.discontinued);
-  const pages = [];
-  for(let i=0; i<live.length; i+=CATALOG_PAGE_MAX){
-    pages.push(live.slice(i, i+CATALOG_PAGE_MAX).map(catalogEntryFor));
-  }
-  if(!pages.length) pages.push([]);   // keep an empty page so the site gets a clean answer
-
-  try{
-    for(let i=0; i<pages.length; i++){
-      await fsDB.collection('catalogPages').doc(slug+'-'+i).set({
-        category, page:i, items: pages[i],
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-    }
-    // Clear any pages left behind after the category shrank, so the site never
-    // reads a stale page that still lists removed products.
-    for(let i=pages.length; i<pages.length+5; i++){
-      fsDB.collection('catalogPages').doc(slug+'-'+i).delete().catch(()=>{});
-    }
-    await publishCatalogIndex();
-  }catch(e){ console.error('catalog publish', e); }
+function catalogEntryFor(s){
+  return {
+    sku: s.id, n: s.itemName||'', sub: s.subcategory||'', m: s.material||'',
+    sz: s.size||'', st: computeCatalogStatus(s), f: !!s.featured,
+    p: (s.catalogPhotos||[]).map(r2PathOf),
+    t: (s.catalogThumbs||[]).map(r2PathOf)
+  };
 }
 
-async function publishCatalogIndex(){
-  if(!CLOUD_MODE || !fsDB) return;
+async function putCatalogFile(name, obj){
+  const body = new Blob([JSON.stringify(obj)], {type:'application/json'});
+  const resp = await fetch(R2_WORKER_URL, {
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'X-Upload-Secret': R2_UPLOAD_SECRET,
+      'X-File-Key': 'catalog/'+name
+    },
+    body
+  });
+  if(!resp.ok) throw new Error('Publish failed for '+name+' ('+resp.status+'): '+(await resp.text()).slice(0,200));
+  return (await resp.json()).url;
+}
+
+function buildCatalogPayload(){
   const cats = Array.from(new Set(db.stock.filter(s=>!s.discontinued).map(s=>s.category).filter(Boolean)));
-  const entries = cats.map(cat=>{
+  const files = {};
+  const categories = [];
+  cats.forEach(cat=>{
     const live = db.stock.filter(s=>s.category===cat && !s.discontinued);
+    const slug = catalogSlug(cat);
+    const pages = [];
+    for(let i=0;i<live.length;i+=CATALOG_PAGE_MAX) pages.push(live.slice(i,i+CATALOG_PAGE_MAX).map(catalogEntryFor));
+    if(!pages.length) pages.push([]);
+    pages.forEach((items,i)=>{ files[slug+'-'+i+'.json'] = {category:cat, page:i, items}; });
     const featured = live.find(s=>s.featured && (s.catalogThumbs||[]).length)
                   || live.find(s=>(s.catalogThumbs||[]).length)
                   || live.find(s=>(s.catalogPhotos||[]).length);
-    const cover = featured ? r2PathOf((featured.catalogThumbs||[])[0] || (featured.catalogPhotos||[])[0]) : '';
-    const subs = Array.from(new Set(live.map(s=>s.subcategory).filter(Boolean)));
-    return {
-      category: cat,
-      slug: catalogSlug(cat),
-      count: live.length,
-      pages: Math.max(1, Math.ceil(live.length / CATALOG_PAGE_MAX)),
-      cover,
-      subs
-    };
-  });
-  try{
-    await fsDB.collection('catalogIndex').doc('index').set({
-      categories: entries,
-      photoBase: R2_PUBLIC_BASE,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    categories.push({
+      category: cat, slug, count: live.length, pages: pages.length,
+      cover: featured ? r2PathOf((featured.catalogThumbs||[])[0] || (featured.catalogPhotos||[])[0]) : '',
+      subs: Array.from(new Set(live.map(s=>s.subcategory).filter(Boolean)))
     });
-  }catch(e){ console.error('catalog index', e); }
+  });
+  // The version stamp is appended to page URLs by the site, so a fresh publish
+  // is picked up immediately instead of serving a cached older copy.
+  files['index.json'] = { categories, photoBase: R2_PUBLIC_BASE, v: Date.now() };
+  return files;
 }
 
-/* Kept for call sites throughout the app: a single product changing means its
-   category page (and the index) need republishing. */
-function syncCatalogItem(sku){
-  if(!CLOUD_MODE || !fsDB) return;
-  const s = db.stock.find(x=>x.id===sku);
-  if(!s || !s.category) return;
-  publishCatalogCategory(s.category);
+let catalogPublishPending = null;
+/* Any stock change schedules a republish. Publishing rewrites whole files, so
+   a burst of edits is collapsed into one publish rather than one per change. */
+function syncCatalogItem(){
+  if(!CLOUD_MODE) return;
+  clearTimeout(catalogPublishPending);
+  catalogPublishPending = setTimeout(()=>{ publishCatalogQuietly(); }, 4000);
+}
+async function publishCatalogQuietly(){
+  try{
+    const files = buildCatalogPayload();
+    for(const [name,obj] of Object.entries(files)){
+      if(name!=='index.json') await putCatalogFile(name, obj);
+    }
+    await putCatalogFile('index.json', files['index.json']);   // last, so it never points at files that aren't up yet
+  }catch(e){ console.error('catalog publish', e); }
 }
 
 async function syncAllToCatalog(){
-  if(!CLOUD_MODE || !fsDB){ alert('Turn on cloud sync first — the public site reads from there.'); return; }
-  const cats = Array.from(new Set(db.stock.map(s=>s.category).filter(Boolean)));
-  if(!confirm('Publish the whole catalog to the public site now?\n\n'+db.stock.filter(s=>!s.discontinued).length+' product(s) across '+cats.length+' category(ies).')) return;
+  const live = db.stock.filter(s=>!s.discontinued);
+  const files = buildCatalogPayload();
+  const pageCount = Object.keys(files).length - 1;
+  if(!confirm('Publish the catalog to the public site now?\n\n'+live.length+' product(s), '+pageCount+' file(s).')) return;
   try{
-    for(const cat of cats){ await publishCatalogCategory(cat); }
-    await publishCatalogIndex();
-    logAudit('Catalog published', cats.length+' category(ies)');
-    alert('Published. The public site will show the update within a few seconds.');
+    for(const [name,obj] of Object.entries(files)){
+      if(name!=='index.json') await putCatalogFile(name, obj);
+    }
+    await putCatalogFile('index.json', files['index.json']);
+    logAudit('Catalog published', live.length+' product(s)');
+    alert('Published. The public site will show the update shortly.');
   }catch(e){ alert('Could not publish: '+e.message); }
 }
 window.syncAllToCatalog = syncAllToCatalog;
@@ -3345,8 +3347,6 @@ window.syncAllToCatalog = syncAllToCatalog;
    holds the real R2 keys; the app only knows a shared "upload secret", which
    is a reasonable deterrent for a small shop's catalog, not bank-grade
    security (see the Worker's own code comments for the full explanation). */
-const R2_WORKER_URL = 'https://hammad-world-photo-upload.hammadworld25.workers.dev';
-const R2_UPLOAD_SECRET = 'Wnb3zSQ4xvNDkTZKb-Q8CzyP7qVA42nGUzxSqAcviEE';
 
 function resizeImageFile(file, maxDimension, quality){
   return new Promise((resolve, reject)=>{
@@ -3361,7 +3361,13 @@ function resizeImageFile(file, maxDimension, quality){
       const canvas = document.createElement('canvas');
       canvas.width = width; canvas.height = height;
       canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-      canvas.toBlob(blob=>{ blob ? resolve(blob) : reject(new Error('Could not process image')); }, 'image/jpeg', quality);
+      // WebP is roughly 25-35% smaller than JPEG at the same visual quality and
+      // is supported by every current browser. If this device can't encode it,
+      // fall back to JPEG so an upload never fails over a format.
+      canvas.toBlob(blob=>{
+        if(blob && blob.type === 'image/webp'){ resolve(blob); return; }
+        canvas.toBlob(jpg=>{ jpg ? resolve(jpg) : reject(new Error('Could not process image')); }, 'image/jpeg', quality);
+      }, 'image/webp', quality);
     };
     img.onerror = reject;
     reader.readAsDataURL(file);
@@ -3372,7 +3378,9 @@ async function uploadOneToR2(blob, fileKey){
   const resp = await fetch(R2_WORKER_URL, {
     method: 'POST',
     headers: {
-      'Content-Type': 'image/jpeg',
+      // Must match the blob, or WebP files get stored labelled as JPEG and
+      // some browsers refuse to display them.
+      'Content-Type': blob.type || 'image/jpeg',
       'X-Upload-Secret': R2_UPLOAD_SECRET,
       'X-File-Key': fileKey
     },
@@ -3389,9 +3397,11 @@ async function uploadProductPhoto(sku, file, slotIndex){
   const stamp = Date.now();
   const fullBlob  = await resizeImageFile(file, 1600, 0.9);
   const thumbBlob = await resizeImageFile(file, 500, 0.82);
+  const ext = fullBlob.type === 'image/webp' ? '.webp' : '.jpg';
+  const tExt = thumbBlob.type === 'image/webp' ? '.webp' : '.jpg';
   const base = 'products/'+sku+'-'+slotIndex+'-'+stamp;
-  const fullUrl  = await uploadOneToR2(fullBlob,  base+'.jpg');
-  const thumbUrl = await uploadOneToR2(thumbBlob, base+'-thumb.jpg');
+  const fullUrl  = await uploadOneToR2(fullBlob,  base+ext);
+  const thumbUrl = await uploadOneToR2(thumbBlob, base+'-thumb'+tExt);
   return {full: fullUrl, thumb: thumbUrl};
 }
 
