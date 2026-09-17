@@ -1443,12 +1443,16 @@ function renderSales(){
     <div class="item-row-card">
       <button class="rm" onclick="removeSaleItem(${idx})">×</button>
       <div class="li-main">${it.itemName} <span style="color:var(--ink-500);font-weight:500;">(${it.batch||'—'})</span></div>
-      <div class="step">Box price ${fmt(it.boxPrice)} • Piece price ${fmt(it.piecePrice)} (${it.piecesPerBox}/box)</div>
+      <div class="step">MRP ${fmt(it.mrpBoxPrice)} / box • ${it.piecesPerBox} pcs/box${Number(it.boxPrice)!==Number(it.mrpBoxPrice) ? ' • <b style="color:var(--clay-900);">rate changed</b>' : ''}</div>
       <div class="row2" style="margin-top:6px;">
+        <div class="field"><label>Rate per box</label><input type="number" value="${it.boxPrice}" onchange="updateSaleRate(${idx},'box',this.value)"/></div>
+        <div class="field"><label>Rate per piece</label><input type="number" value="${Number(it.piecePrice).toFixed(2)}" onchange="updateSaleRate(${idx},'piece',this.value)"/></div>
+      </div>
+      <div class="row2">
         <div class="field"><label>Boxes</label><input type="number" value="${it.boxQty||''}" placeholder="0" onchange="updateSaleItem(${idx},'boxQty',this.value)"/></div>
         <div class="field"><label>Loose pieces</label><input type="number" value="${it.pieceQty||''}" placeholder="0" onchange="updateSaleItem(${idx},'pieceQty',this.value)"/></div>
       </div>
-      <div class="field"><label>Discount %</label><input type="number" value="${it.discount||''}" placeholder="0" onchange="updateSaleItem(${idx},'discount',this.value)"/></div>
+      <div class="field"><label>Extra discount % (optional)</label><input type="number" value="${it.discount||''}" placeholder="0" onchange="updateSaleItem(${idx},'discount',this.value)"/></div>
       <div style="font-size:12px;color:var(--ink-500);">GST ${it.gst}% • Line total <b style="color:var(--clay-900);">${fmt(br.total)}</b></div>
     </div>`;
   }).join('');
@@ -1549,6 +1553,7 @@ function pickStockForSale(stockId){
   saleDraft.items.push({
     stockId:s.id, itemName:s.itemName, batch:s.batch, piecesPerBox,
     boxPrice: s.mrp, piecePrice: s.mrp/piecesPerBox,
+    mrpBoxPrice: s.mrp,   // kept for reference so the bill can show what was negotiated off
     boxQty:1, pieceQty:0, discount:0, gst:s.gst
   });
   document.getElementById('saleSearch').value='';
@@ -1556,6 +1561,20 @@ function pickStockForSale(stockId){
 }
 function removeSaleItem(idx){ saleDraft.items.splice(idx,1); render(); }
 function updateSaleItem(idx,field,val){ saleDraft.items[idx][field]=Number(val); render(); }
+/* Tiles are sold by negotiated rate, so either rate can be typed directly.
+   Editing one side updates the other so box and piece pricing never drift
+   apart and quietly produce a wrong line total. */
+function updateSaleRate(idx, which, val){
+  const it = saleDraft.items[idx];
+  if(!it) return;
+  const n = Number(val);
+  if(!isFinite(n) || n < 0){ render(); return; }
+  const ppb = Number(it.piecesPerBox)||1;
+  if(which==='box'){ it.boxPrice = n; it.piecePrice = n/ppb; }
+  else { it.piecePrice = n; it.boxPrice = n*ppb; }
+  render();
+}
+window.updateSaleRate = updateSaleRate;
 function saveSale(){
   if(CLOUD_MODE){ saveSaleCloud(); return; }
   for(const it of saleDraft.items){
@@ -3919,11 +3938,16 @@ function renderQuoteForm(){
     <div class="item-row-card">
       <button class="rm" onclick="removeQuoteItem(${idx})">×</button>
       <div class="li-main">${it.itemName} <span style="color:var(--ink-500);font-weight:500;">(${it.batch||'—'})</span></div>
+      <div class="step">MRP ${fmt(it.mrpBoxPrice)} / box • ${it.piecesPerBox} pcs/box${Number(it.boxPrice)!==Number(it.mrpBoxPrice) ? ' • <b style="color:var(--clay-900);">rate changed</b>' : ''}</div>
       <div class="row2" style="margin-top:6px;">
+        <div class="field"><label>Rate per box</label><input type="number" value="${it.boxPrice}" onchange="updateQuoteRate(${idx},'box',this.value)"/></div>
+        <div class="field"><label>Rate per piece</label><input type="number" value="${Number(it.piecePrice).toFixed(2)}" onchange="updateQuoteRate(${idx},'piece',this.value)"/></div>
+      </div>
+      <div class="row2">
         <div class="field"><label>Boxes</label><input type="number" value="${it.boxQty||''}" placeholder="0" onchange="updateQuoteItem(${idx},'boxQty',this.value)"/></div>
         <div class="field"><label>Loose pieces</label><input type="number" value="${it.pieceQty||''}" placeholder="0" onchange="updateQuoteItem(${idx},'pieceQty',this.value)"/></div>
       </div>
-      <div class="field"><label>Discount %</label><input type="number" value="${it.discount||''}" placeholder="0" onchange="updateQuoteItem(${idx},'discount',this.value)"/></div>
+      <div class="field"><label>Extra discount % (optional)</label><input type="number" value="${it.discount||''}" placeholder="0" onchange="updateQuoteItem(${idx},'discount',this.value)"/></div>
       <div style="font-size:12px;color:var(--ink-500);">Line total <b>${fmt(gross-disc)}</b></div>
     </div>`;
   }).join('');
@@ -3980,10 +4004,21 @@ function addQuoteItem(stockId){
   if(!s) return;
   const ppb = s.piecesPerBox||1;
   quoteDraft.items.push({stockId:s.id, itemName:s.itemName, batch:s.batch, piecesPerBox:ppb,
-    boxPrice:s.mrp, piecePrice:s.mrp/ppb, boxQty:1, pieceQty:0, discount:0, gst:s.gst});
+    boxPrice:s.mrp, piecePrice:s.mrp/ppb, mrpBoxPrice:s.mrp, boxQty:1, pieceQty:0, discount:0, gst:s.gst});
   document.getElementById('quoteSearch').value='';
   render();
 }
+function updateQuoteRate(idx, which, val){
+  const it = quoteDraft.items[idx];
+  if(!it) return;
+  const n = Number(val);
+  if(!isFinite(n) || n < 0){ render(); return; }
+  const ppb = Number(it.piecesPerBox)||1;
+  if(which==='box'){ it.boxPrice = n; it.piecePrice = n/ppb; }
+  else { it.piecePrice = n; it.boxPrice = n*ppb; }
+  render();
+}
+window.updateQuoteRate = updateQuoteRate;
 function removeQuoteItem(idx){ quoteDraft.items.splice(idx,1); render(); }
 function updateQuoteItem(idx,field,val){ quoteDraft.items[idx][field]=Number(val); render(); }
 function saveQuotation(){
