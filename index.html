@@ -499,9 +499,8 @@ const titles = {
   reports:['Reports','Daily & monthly summary'],
   stockDetail:['Product history','Purchases & sales for this SKU'],
   billDetail:['Bill','View & edit this bill'],
-  parties:['Ledger','Suppliers & customers — click a name for their bills'],
+  parties:['Manage parties','Add & edit suppliers and customers'],
   partyDetail:['Party ledger','All bills for this party'],
-  ledgerView:['Ledger','Detail view'],
   expenses:['Expenses','Daily expense tracker'],
   addExpense:['Add Expense','Log a business expense'],
   staffList:['Staff Ledger','Salary, advances & pending balance'],
@@ -515,7 +514,7 @@ const titles = {
   printPreview:['Document','Preview & print'],
   findDuplicates:['Stock check','Duplicates, hidden items & missing products'],
   openingStockHistory:['Opening stock history','Every opening stock entry you saved'],
-  fullLedger:['Full Ledger','Every purchase, sale & opening stock entry'],
+  fullLedger:['Ledger','Balances, transactions & cash'],
   openingStockDetail:['Opening stock entry','View & edit this entry']
 };
 
@@ -551,7 +550,6 @@ function render(){
   if(currentScreen==='billDetail'){ main.innerHTML = renderBillDetail(); return; }
   if(currentScreen==='parties'){ main.innerHTML = renderPartiesList(); return; }
   if(currentScreen==='partyDetail'){ main.innerHTML = renderPartyDetail(); return; }
-  if(currentScreen==='ledgerView'){ main.innerHTML = renderLedgerView(); return; }
   if(currentScreen==='expenses'){ main.innerHTML = renderExpenses(); return; }
   if(currentScreen==='addExpense'){ main.innerHTML = renderAddExpense(); return; }
   if(currentScreen==='staffList'){ main.innerHTML = renderStaffList(); return; }
@@ -594,8 +592,8 @@ function renderDashboard(){
       ${isOwner() ? `
       <div class="stat"><div class="num">${fmt(purchaseTotal)}</div><div class="lbl">Purchase</div></div>
       <div class="stat"><div class="num">${fmt(salesTotal)}</div><div class="lbl">Sale</div></div>
-      <div class="stat" style="cursor:pointer;" onclick="openLedgerView('creditors')"><div class="num" style="color:var(--red-700);">${fmt(totalToPay())}</div><div class="lbl">To Pay (Supplier)</div></div>
-      <div class="stat" style="cursor:pointer;" onclick="openLedgerView('debtors')"><div class="num">${fmt(totalToCollect())}</div><div class="lbl">To Receive (Customer)</div></div>
+      <div class="stat" style="cursor:pointer;" onclick="ledgerTab='balances';setScreen('fullLedger')"><div class="num" style="color:var(--red-700);">${fmt(totalToPay())}</div><div class="lbl">To Pay (Supplier)</div></div>
+      <div class="stat" style="cursor:pointer;" onclick="ledgerTab='balances';setScreen('fullLedger')"><div class="num">${fmt(totalToCollect())}</div><div class="lbl">To Receive (Customer)</div></div>
       <div class="stat"><div class="num">${fmt(stockValue)}</div><div class="lbl">Stock Value</div></div>
       ` : ''}
       <div class="stat"><div class="num">${db.stock.filter(s=>s.qty>0).length}</div><div class="lbl">Item in Stock</div></div>
@@ -616,12 +614,9 @@ function renderDashboard(){
     ${isOwner() ? `
     <div class="card">
       <h3>Ledger</h3>
-      <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('debtors')"><div class="li-main">Debtors</div><div class="li-right">→</div></div>
-      <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('creditors')"><div class="li-main">Creditors</div><div class="li-right">→</div></div>
-      <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('cashsale')"><div class="li-main">Cash Sale</div><div class="li-right">→</div></div>
-      <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('cashpurchase')"><div class="li-main">Cash Purchase</div><div class="li-right">→</div></div>
-      <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('walkin')"><div class="li-main">Walk-in Customer</div><div class="li-right">→</div></div>
-      <button class="btn btn-ghost" style="margin-top:10px;" onclick="setScreen('parties')">+ Add / manage suppliers & customers</button>
+      <div class="step">Balances, all bills, cash &amp; walk-in, and returns — in one place.</div>
+      <button class="btn btn-primary" style="margin-top:8px;" onclick="ledgerTab='balances';setScreen('fullLedger')">📒 Open Ledger</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('parties')">+ Add / manage suppliers &amp; customers</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('reminders')">🔔 Payment reminders</button>
     </div>
     <div class="card">
@@ -629,7 +624,6 @@ function renderDashboard(){
       <button class="btn btn-ghost" onclick="setScreen('addExpense')">💵 Add Expense</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('pnl')">📊 Profit &amp; Loss</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('shopSettings')">🏪 Shop details (for invoices)</button>
-      <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('fullLedger')">📚 Full Ledger (all bills)</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="syncAllToCatalog()">🌐 Sync catalog to public site now</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('staffList')">👷 Staff Ledger</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('auditLog')">📋 Activity log</button>
@@ -644,9 +638,10 @@ function renderDashboard(){
     </div>
     ` : `
     <div class="card">
-      <h3>Customer balances</h3>
-      <div class="list-row" style="cursor:pointer;" onclick="openLedgerView('debtors')"><div class="li-main">Customer ledger (who owes us)</div><div class="li-right">→</div></div>
-      <button class="btn btn-ghost" style="margin-top:10px;" onclick="setScreen('reminders')">🔔 Payment reminders</button>
+      <h3>Ledger</h3>
+      <div class="step">Balances, all bills, cash &amp; walk-in, and returns.</div>
+      <button class="btn btn-primary" style="margin-top:8px;" onclick="ledgerTab='balances';setScreen('fullLedger')">📒 Open Ledger</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('reminders')">🔔 Payment reminders</button>
     </div>
     <div class="card">
       <h3>Expenses</h3>
@@ -1897,64 +1892,217 @@ async function saveOpeningStockEdits(){
   setScreen('fullLedger');
 }
 window.saveOpeningStockEdits = saveOpeningStockEdits;
-let ledgerTab = 'purchase';
-function renderFullLedger(){
-  if(!isOwner()) return ownerOnlyNotice();
-  const q = (document.getElementById('ledgerSearch')?.value||'').trim().toLowerCase();
+let ledgerTab = 'balances';
+let ledgerRange = 'today';           // today | month | custom
+let ledgerFrom = new Date().toISOString().slice(0,10);
+let ledgerTo   = new Date().toISOString().slice(0,10);
 
+/* Balances answer "who owes what" and are always cumulative — a date filter
+   there would be meaningless, since a balance is the running total of every
+   transaction ever. The two transaction tabs are date-driven instead. */
+function ledgerInRange(dateStr){
+  if(!dateStr) return false;
+  const today = todayStr();
+  if(ledgerRange==='today')  return dateStr === today;
+  if(ledgerRange==='month')  return dateStr.startsWith(today.slice(0,7));
+  return dateStr >= (ledgerFrom||today) && dateStr <= (ledgerTo||today);
+}
+function ledgerRangeLabel(){
+  if(ledgerRange==='today') return 'Today';
+  if(ledgerRange==='month') return 'This month';
+  return (ledgerFrom||'')+' to '+(ledgerTo||'');
+}
+function setLedgerRange(r){ ledgerRange = r; render(); }
+function setLedgerDate(which, val){
+  if(which==='from') ledgerFrom = val; else ledgerTo = val;
+  ledgerRange = 'custom';
+  render();
+}
+window.setLedgerRange = setLedgerRange;
+window.setLedgerDate = setLedgerDate;
+
+function ledgerDateBar(){
+  return `
+    <div class="segment">
+      <button class="${ledgerRange==='today'?'active':''}" onclick="setLedgerRange('today')">Today</button>
+      <button class="${ledgerRange==='month'?'active':''}" onclick="setLedgerRange('month')">This month</button>
+      <button class="${ledgerRange==='custom'?'active':''}" onclick="setLedgerRange('custom')">Date range</button>
+    </div>
+    ${ledgerRange==='custom' ? `
+      <div class="row2">
+        <div class="field"><label>From</label><input type="date" value="${ledgerFrom}" onchange="setLedgerDate('from',this.value)"/></div>
+        <div class="field"><label>To</label><input type="date" value="${ledgerTo}" onchange="setLedgerDate('to',this.value)"/></div>
+      </div>` : ''}`;
+}
+
+function renderFullLedger(){
+  const q = (document.getElementById('ledgerSearch')?.value||'').trim().toLowerCase();
   let body = '';
-  if(ledgerTab==='purchase'){
-    let rows = (db.purchases||[]).slice().sort((a,b)=> (a.date<b.date?1:-1));
-    if(q) rows = rows.filter(p=> (p.billNo||'').toLowerCase().includes(q) || (p.supplier||'').toLowerCase().includes(q) || (p.supplierBillNo||'').toLowerCase().includes(q));
-    body = rows.length ? rows.map(p=>`
-      <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('purchase','${p.id}')">
-        <div>
-          <div class="li-main">${p.billNo||p.id}</div>
-          <div class="li-sub">${p.date} • ${p.supplier||'Unknown supplier'}${p.supplierBillNo?' • their bill: '+p.supplierBillNo:''}</div>
-          <div class="li-sub">${(p.items||[]).length} item(s)</div>
-        </div>
-        <div class="li-right">${fmt((p.totalAmount||0)+(p.totalGst||0)+(p.additionalChargesTotal||0))}</div>
-      </div>`).join('') : `<div class="empty">No purchase bills${q?' match that search':''}.</div>`;
-  }
-  else if(ledgerTab==='sale'){
-    let rows = (db.sales||[]).slice().sort((a,b)=> (a.date<b.date?1:-1));
-    if(q) rows = rows.filter(s=> (s.billNo||'').toLowerCase().includes(q) || (s.customer||'').toLowerCase().includes(q));
-    body = rows.length ? rows.map(s=>`
-      <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('sale','${s.id}')">
-        <div>
-          <div class="li-main">${s.billNo||s.id}</div>
-          <div class="li-sub">${s.date} • ${s.customer||'Walk-in'}</div>
-          <div class="li-sub">${(s.items||[]).length} item(s)</div>
-        </div>
-        <div class="li-right">${fmt(s.totalAmount||0)}</div>
-      </div>`).join('') : `<div class="empty">No sale bills${q?' match that search':''}.</div>`;
-  }
-  else {
-    let rows = (db.openingStock||[]).slice().sort((a,b)=> (a.date<b.date?1:-1));
-    if(q) rows = rows.filter(o=> (o.openingNo||'').toLowerCase().includes(q) || (o.items||[]).some(it=>(it.itemName||'').toLowerCase().includes(q)));
-    body = rows.length ? rows.map(o=>{
-      const value = (o.items||[]).reduce((a,it)=> a + (Number(it.qty)||0)*(Number(it.cost)||0), 0);
+
+  /* ---------- BALANCES: every party, cumulative, never date-filtered ---------- */
+  if(ledgerTab==='balances'){
+    const suppliers = db.parties.filter(p=>p.type==='supplier');
+    const customers = db.parties.filter(p=>p.type==='customer');
+    const match = p => !q || (p.name||'').toLowerCase().includes(q) || (p.phone||'').toLowerCase().includes(q);
+    const row = p => {
+      // partyBalance is positive whenever money is owed, for suppliers AND
+      // customers — it is not signed by direction, so it must not be negated.
+      const owed = partyBalance(p.id);
+      const label = owed > 0.01 ? (p.type==='supplier' ? 'To pay' : 'To collect') : (Math.abs(owed)<0.01 ? 'Settled' : 'Advance paid');
+      const colour = owed > 0.01 ? (p.type==='supplier' ? 'var(--red-700)' : 'var(--clay-700)') : 'var(--ink-500)';
       return `
-      <div style="border-bottom:1px solid var(--line);padding:12px 0;cursor:pointer;" onclick="openOpeningStockDetail('${o.id}')">
-        <div style="display:flex;justify-content:space-between;">
-          <div class="li-main">${o.openingNo||'(no number)'}</div>
-          <div class="li-right">${fmt(value)}</div>
-        </div>
-        <div class="li-sub">${o.date||''} • ${(o.items||[]).length} item(s) — tap to view or edit</div>
-        ${(o.items||[]).map(it=>`<div class="li-sub">• ${it.itemName}${it.batch?' ('+it.batch+')':''} — ${it.qty} box(es) @ ${fmt(it.cost)}</div>`).join('')}
+        <div class="list-row" style="cursor:pointer;" onclick="openPartyDetail('${p.id}')">
+          <div><div class="li-main">${p.name}</div><div class="li-sub">${p.phone||'No phone on file'} • ${label}</div></div>
+          <div class="li-right" style="color:${colour};">${fmt(Math.abs(owed))}</div>
+        </div>`;
+    };
+    const sup = suppliers.filter(match), cus = customers.filter(match);
+    const totalPay = totalToPay();          // reuse the app's existing definitions
+    const totalCollect = totalToCollect();  // so these can never drift apart
+    body = `
+      <div class="stat-grid" style="margin-bottom:12px;">
+        <div class="stat"><div class="num" style="color:var(--red-700);">${fmt(totalPay)}</div><div class="lbl">Total to pay (suppliers)</div></div>
+        <div class="stat"><div class="num" style="color:var(--clay-700);">${fmt(totalCollect)}</div><div class="lbl">Total to collect (customers)</div></div>
+      </div>
+      <div class="card"><h3>Suppliers (${sup.length})</h3>${sup.length ? sup.map(row).join('') : `<div class="empty">None${q?' match that search':''}.</div>`}</div>
+      <div class="card"><h3>Customers (${cus.length})</h3>${cus.length ? cus.map(row).join('') : `<div class="empty">None${q?' match that search':''}.</div>`}</div>
+      <button class="btn btn-ghost" onclick="setScreen('parties')">+ Add / manage parties</button>`;
+    return `
+      <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
+      ${ledgerTabBar()}
+      <div class="field"><input id="ledgerSearch" value="${q}" placeholder="Search party name or phone..." oninput="render()"/></div>
+      ${body}`;
+  }
+
+  /* ---------- TRANSACTIONS: bills in the chosen date range ---------- */
+  if(ledgerTab==='transactions'){
+    const purchases = (db.purchases||[]).filter(p=>ledgerInRange(p.date))
+      .filter(p=> !q || (p.billNo||'').toLowerCase().includes(q) || (p.supplier||'').toLowerCase().includes(q) || (p.supplierBillNo||'').toLowerCase().includes(q));
+    const sales = (db.sales||[]).filter(s=>ledgerInRange(s.date))
+      .filter(s=> !q || (s.billNo||'').toLowerCase().includes(q) || (s.customer||'').toLowerCase().includes(q));
+    const opening = (db.openingStock||[]).filter(o=>ledgerInRange(o.date))
+      .filter(o=> !q || (o.openingNo||'').toLowerCase().includes(q) || (o.items||[]).some(it=>(it.itemName||'').toLowerCase().includes(q)));
+
+    const saleTotal = sales.reduce((a,s)=>a+(s.totalAmount||0),0);
+    const purchaseTotal = purchases.reduce((a,p)=>a+(p.totalAmount||0)+(p.totalGst||0)+(p.additionalChargesTotal||0),0);
+
+    body = `
+      <div class="stat-grid" style="margin-bottom:12px;">
+        <div class="stat"><div class="num">${fmt(saleTotal)}</div><div class="lbl">Sales — ${ledgerRangeLabel()}</div></div>
+        <div class="stat"><div class="num">${fmt(purchaseTotal)}</div><div class="lbl">Purchases — ${ledgerRangeLabel()}</div></div>
+      </div>
+      <div class="card">
+        <h3>Sale bills (${sales.length})</h3>
+        ${sales.length ? sales.sort((a,b)=>a.date<b.date?1:-1).map(s=>`
+          <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('sale','${s.id}')">
+            <div><div class="li-main">${s.billNo||s.id}</div><div class="li-sub">${s.date} • ${s.customer||'Walk-in'} • ${(s.items||[]).length} item(s)</div></div>
+            <div class="li-right">${fmt(s.totalAmount||0)}</div>
+          </div>`).join('') : `<div class="empty">No sale bills in this period.</div>`}
+      </div>
+      <div class="card">
+        <h3>Purchase bills (${purchases.length})</h3>
+        ${purchases.length ? purchases.sort((a,b)=>a.date<b.date?1:-1).map(p=>`
+          <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('purchase','${p.id}')">
+            <div><div class="li-main">${p.billNo||p.id}</div><div class="li-sub">${p.date} • ${p.supplier||'Unknown'}${p.supplierBillNo?' • their bill: '+p.supplierBillNo:''}</div></div>
+            <div class="li-right">${fmt((p.totalAmount||0)+(p.totalGst||0)+(p.additionalChargesTotal||0))}</div>
+          </div>`).join('') : `<div class="empty">No purchase bills in this period.</div>`}
+      </div>
+      <div class="card">
+        <h3>Opening stock (${opening.length})</h3>
+        ${opening.length ? opening.sort((a,b)=>a.date<b.date?1:-1).map(o=>{
+          const value = (o.items||[]).reduce((a,it)=> a + (Number(it.qty)||0)*(Number(it.cost)||0), 0);
+          return `
+          <div class="list-row" style="cursor:pointer;" onclick="openOpeningStockDetail('${o.id}')">
+            <div><div class="li-main">${o.openingNo||'(no number)'}</div><div class="li-sub">${o.date||''} • ${(o.items||[]).length} item(s)</div></div>
+            <div class="li-right">${fmt(value)}</div>
+          </div>`;
+        }).join('') : `<div class="empty">No opening stock entries in this period.</div>`}
       </div>`;
-    }).join('') : `<div class="empty">No opening stock entries${q?' match that search':''}.</div>`;
+  }
+
+  /* ---------- RETURNS: credit notes (sale) and debit notes (purchase) ---------- */
+  else if(ledgerTab==='returns'){
+    const saleRet = (db.saleReturns||[]).filter(r=>ledgerInRange(r.date))
+      .filter(r=> !q || (r.billNo||'').toLowerCase().includes(q));
+    const purchRet = (db.purchaseReturns||[]).filter(r=>ledgerInRange(r.date))
+      .filter(r=> !q || (r.billNo||'').toLowerCase().includes(q));
+    const saleRetTotal = saleRet.reduce((a,r)=>a+(r.totalAmount||0),0);
+    const purchRetTotal = purchRet.reduce((a,r)=>a+(r.totalAmount||0)+(r.totalGst||0),0);
+    body = `
+      <div class="stat-grid" style="margin-bottom:12px;">
+        <div class="stat"><div class="num">${fmt(saleRetTotal)}</div><div class="lbl">Sale returns — ${ledgerRangeLabel()}</div></div>
+        <div class="stat"><div class="num">${fmt(purchRetTotal)}</div><div class="lbl">Purchase returns — ${ledgerRangeLabel()}</div></div>
+      </div>
+      <div class="card">
+        <h3>Sale returns / credit notes (${saleRet.length})</h3>
+        ${saleRet.length ? saleRet.sort((a,b)=>a.date<b.date?1:-1).map(r=>{
+          const ref = (db.sales||[]).find(s=>s.id===r.refSaleId);
+          return `
+          <div class="list-row" style="cursor:pointer;" onclick="openPrintPreview('saleReturn','${r.id}')">
+            <div><div class="li-main">${r.billNo||r.id}</div><div class="li-sub">${r.date} • against ${ref?(ref.billNo||''):'(bill not found)'} • ${(r.items||[]).length} item(s)</div></div>
+            <div class="li-right">${fmt(r.totalAmount||0)}</div>
+          </div>`;
+        }).join('') : `<div class="empty">No sale returns in this period.</div>`}
+      </div>
+      <div class="card">
+        <h3>Purchase returns / debit notes (${purchRet.length})</h3>
+        ${purchRet.length ? purchRet.sort((a,b)=>a.date<b.date?1:-1).map(r=>`
+          <div class="list-row" style="cursor:pointer;" onclick="openPrintPreview('purchaseReturn','${r.id}')">
+            <div><div class="li-main">${r.billNo||r.id}</div><div class="li-sub">${r.date} • ${(r.items||[]).length} item(s)</div></div>
+            <div class="li-right">${fmt((r.totalAmount||0)+(r.totalGst||0))}</div>
+          </div>`).join('') : `<div class="empty">No purchase returns in this period.</div>`}
+      </div>
+      <div class="step">Returns open as a printable note. They can't be edited after saving — a return already moved stock and money, so changing one afterwards would leave both wrong. To correct a mistaken return, record the opposite transaction instead.</div>`;
+  }
+
+  /* ---------- CASH & WALK-IN: bills with no party attached ---------- */
+  else {
+    const cashSales = (db.sales||[]).filter(s=>!s.partyId && ledgerInRange(s.date))
+      .filter(s=> !q || (s.billNo||'').toLowerCase().includes(q) || (s.customer||'').toLowerCase().includes(q));
+    const cashPurchases = (db.purchases||[]).filter(p=>!p.partyId && ledgerInRange(p.date))
+      .filter(p=> !q || (p.billNo||'').toLowerCase().includes(q) || (p.supplier||'').toLowerCase().includes(q));
+    const inTotal = cashSales.reduce((a,s)=>a+(s.totalAmount||0),0);
+    const outTotal = cashPurchases.reduce((a,p)=>a+(p.totalAmount||0)+(p.totalGst||0)+(p.additionalChargesTotal||0),0);
+
+    body = `
+      <div class="step">Bills not linked to any party — cash sales, walk-in customers and one-off purchases. These never appear under Balances, so this is their only home.</div>
+      <div class="stat-grid" style="margin:12px 0;">
+        <div class="stat"><div class="num" style="color:var(--clay-700);">${fmt(inTotal)}</div><div class="lbl">Cash in — ${ledgerRangeLabel()}</div></div>
+        <div class="stat"><div class="num" style="color:var(--red-700);">${fmt(outTotal)}</div><div class="lbl">Cash out — ${ledgerRangeLabel()}</div></div>
+      </div>
+      <div class="card">
+        <h3>Cash / walk-in sales (${cashSales.length})</h3>
+        ${cashSales.length ? cashSales.sort((a,b)=>a.date<b.date?1:-1).map(s=>`
+          <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('sale','${s.id}')">
+            <div><div class="li-main">${s.billNo||s.id}</div><div class="li-sub">${s.date} • ${s.customer||'Walk-in'}</div></div>
+            <div class="li-right">${fmt(s.totalAmount||0)}</div>
+          </div>`).join('') : `<div class="empty">No cash sales in this period.</div>`}
+      </div>
+      <div class="card">
+        <h3>Cash purchases (${cashPurchases.length})</h3>
+        ${cashPurchases.length ? cashPurchases.sort((a,b)=>a.date<b.date?1:-1).map(p=>`
+          <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('purchase','${p.id}')">
+            <div><div class="li-main">${p.billNo||p.id}</div><div class="li-sub">${p.date} • ${p.supplier||'Unknown'}</div></div>
+            <div class="li-right">${fmt((p.totalAmount||0)+(p.totalGst||0)+(p.additionalChargesTotal||0))}</div>
+          </div>`).join('') : `<div class="empty">No cash purchases in this period.</div>`}
+      </div>`;
   }
 
   return `
     <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
-    <div class="segment">
-      <button class="${ledgerTab==='purchase'?'active':''}" onclick="ledgerTab='purchase';render()">Purchase</button>
-      <button class="${ledgerTab==='sale'?'active':''}" onclick="ledgerTab='sale';render()">Sale</button>
-      <button class="${ledgerTab==='opening'?'active':''}" onclick="ledgerTab='opening';render()">Opening stock</button>
-    </div>
+    ${ledgerTabBar()}
+    ${ledgerDateBar()}
     <div class="field"><input id="ledgerSearch" value="${q}" placeholder="Search bill no, party or product..." oninput="render()"/></div>
-    <div class="card">${body}</div>`;
+    ${body}`;
+}
+function ledgerTabBar(){
+  return `
+    <div class="segment">
+      <button class="${ledgerTab==='balances'?'active':''}" onclick="ledgerTab='balances';render()">Balances</button>
+      <button class="${ledgerTab==='transactions'?'active':''}" onclick="ledgerTab='transactions';render()">Transactions</button>
+      <button class="${ledgerTab==='cash'?'active':''}" onclick="ledgerTab='cash';render()">Cash &amp; walk-in</button>
+      <button class="${ledgerTab==='returns'?'active':''}" onclick="ledgerTab='returns';render()">Returns</button>
+    </div>`;
 }
 function renderFindDuplicates(){
   if(!isOwner()) return ownerOnlyNotice();
@@ -2273,7 +2421,9 @@ function renderBillDetail(){
       ${itemsHtml || `<div class="empty">No items.</div>`}
     </div>
     <button class="btn btn-ghost" onclick="openPrintPreview('${type}','${id}')">🖨 View / Print this bill</button>
-    <button class="btn btn-primary" style="margin-top:8px;" onclick="saveBillDetailEdits()">Save changes</button>
+    ${isOwner()
+      ? `<button class="btn btn-primary" style="margin-top:8px;" onclick="saveBillDetailEdits()">Save changes</button>`
+      : `<div class="step">Viewing only — editing a saved bill is restricted to owner accounts.</div>`}
   `;
 }
 function goBackFromBillDetail(){
@@ -2301,6 +2451,7 @@ function removeBillItem(idx){
   render();
 }
 function saveBillDetailEdits(){
+  if(!isOwner()){ alert('Editing a saved bill is restricted to owner accounts.'); return; }
   if(CLOUD_MODE){ saveBillDetailEditsCloud(); return; }
   const { type, id, originalItems } = billDetailCtx;
   const isPurchase = type==='purchase';
@@ -2572,11 +2723,11 @@ function renderReports(){
     </div>
     <div class="card">
       <h3>${periodLabel} sale returns (${saleReturns.length})</h3>
-      ${saleReturns.length ? saleReturns.map(r=>`<div class="list-row"><div><div class="li-main">${r.billNo}</div><div class="li-sub">${r.date} • against ${r.refSaleId}</div></div><div class="li-right">${fmt(r.totalAmount)}</div></div>`).join('') : `<div class="empty">No sale returns recorded.</div>`}
+      ${saleReturns.length ? saleReturns.map(r=>{ const ref=(db.sales||[]).find(s=>s.id===r.refSaleId); return `<div class="list-row" style="cursor:pointer;" onclick="openPrintPreview('saleReturn','${r.id}')"><div><div class="li-main">${r.billNo}</div><div class="li-sub">${r.date} • against ${ref?(ref.billNo||''):'(bill not found)'}</div></div><div class="li-right">${fmt(r.totalAmount)}</div></div>`; }).join('') : `<div class="empty">No sale returns recorded.</div>`}
     </div>
     <div class="card">
       <h3>${periodLabel} purchase returns (${purchaseReturns.length})</h3>
-      ${purchaseReturns.length ? purchaseReturns.map(r=>`<div class="list-row"><div><div class="li-main">${r.billNo}</div><div class="li-sub">${r.date} • ${r.items.length} item(s)</div></div><div class="li-right">${fmt((r.totalAmount||0)+(r.totalGst||0))}</div></div>`).join('') : `<div class="empty">No purchase returns recorded.</div>`}
+      ${purchaseReturns.length ? purchaseReturns.map(r=>`<div class="list-row" style="cursor:pointer;" onclick="openPrintPreview('purchaseReturn','${r.id}')"><div><div class="li-main">${r.billNo}</div><div class="li-sub">${r.date} • ${r.items.length} item(s)</div></div><div class="li-right">${fmt((r.totalAmount||0)+(r.totalGst||0))}</div></div>`).join('') : `<div class="empty">No purchase returns recorded.</div>`}
     </div>
     ${isOwner() ? `
     <div class="card">
@@ -3371,52 +3522,6 @@ window.savePartyEdits = savePartyEdits;
 window.deleteParty = deleteParty;
 
 /* ===================== LEDGER SUB-VIEWS ===================== */
-let ledgerViewKind = null;
-function openLedgerView(kind){ ledgerViewKind = kind; goTo('ledgerView'); }
-function renderLedgerView(){
-  const kind = ledgerViewKind;
-  // Staff are allowed the customer ledger only — everything else is owner-only.
-  if(!isOwner() && kind!=='debtors'){
-    return `<button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back</button>
-      <div class="card"><h3>Not available</h3><div class="step">This view is restricted to owner accounts.</div></div>`;
-  }
-  const titleMap = {debtors:'Debtors (they owe you)', creditors:'Creditors (you owe them)', cashsale:'Cash Sale', cashpurchase:'Cash Purchase', walkin:'Walk-in Customer'};
-  let body = '';
-
-  if(kind==='debtors' || kind==='creditors'){
-    const type = kind==='debtors' ? 'customer' : 'supplier';
-    const parties = db.parties.filter(p=>p.type===type && partyBalance(p.id)>0);
-    body = parties.length ? parties.map(p=>`
-      <div class="list-row" style="cursor:pointer;" onclick="openPartyDetail('${p.id}')">
-        <div><div class="li-main">${p.name}</div><div class="li-sub">${p.phone||''}</div></div>
-        <div class="li-right" style="color:var(--red-700);">${fmt(partyBalance(p.id))}</div>
-      </div>`).join('') : `<div class="empty">No outstanding ${kind} right now.</div>`;
-  } else if(kind==='cashsale' || kind==='walkin'){
-    const sales = kind==='walkin'
-      ? db.sales.filter(s=>!s.partyId && (s.customer||'Walk-in')==='Walk-in')
-      : db.sales.filter(s=>!s.partyId);
-    sales.sort((a,b)=> a.date<b.date?1:-1);
-    body = sales.length ? sales.map(s=>`
-      <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('sale','${s.id}')">
-        <div><div class="li-main">${s.billNo}</div><div class="li-sub">${s.date} • ${s.customer}</div></div>
-        <div class="li-right">${fmt(s.totalAmount)}</div>
-      </div>`).join('') : `<div class="empty">No bills here yet.</div>`;
-  } else if(kind==='cashpurchase'){
-    const purchases = db.purchases.filter(p=>!p.partyId);
-    purchases.sort((a,b)=> a.date<b.date?1:-1);
-    body = purchases.length ? purchases.map(p=>`
-      <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('purchase','${p.id}')">
-        <div><div class="li-main">${p.billNo}</div><div class="li-sub">${p.date} • ${p.supplier}</div></div>
-        <div class="li-right">${fmt(p.totalAmount+p.totalGst+(p.additionalChargesTotal||0))}</div>
-      </div>`).join('') : `<div class="empty">No bills here yet.</div>`;
-  }
-
-  return `
-    <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back to Dashboard</button>
-    <div class="card"><h3>${titleMap[kind]||'Ledger'}</h3>${body}</div>
-  `;
-}
-window.openLedgerView = openLedgerView;
 
 /* ===================== EXPENSE MANAGEMENT ===================== */
 const EXPENSE_CATEGORIES = ['Staff Salary','Refreshment','Labour Charges','Rent','Electricity','Maintenance','Others'];
