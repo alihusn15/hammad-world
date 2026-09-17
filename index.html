@@ -2774,8 +2774,14 @@ service cloud.firestore {
 
     // PUBLIC — the customer website reads this with no login at all.
     // Only ever write customer-safe fields here (see syncCatalogItem in the app).
-    match /catalog/{doc} { allow read: if true;
-                           allow write: if isOwner(); }
+    // PUBLIC — read by the customer website with no login.
+    // Only ever write customer-safe fields here (see catalogEntryFor in the app).
+    match /catalogIndex/{doc} { allow read: if true;
+                                allow write: if isOwner(); }
+    match /catalogPages/{doc} { allow read: if true;
+                                allow write: if isOwner(); }
+    match /catalog/{doc}      { allow read: if true;
+                                allow write: if isOwner(); }
     match /parties/{doc}        { allow read: if signedIn();
                                   allow create: if signedIn();
                                   allow update, delete: if isOwner(); }
@@ -3213,28 +3219,123 @@ function computeCatalogStatus(s){
   if(s.qty <= lowStockThresholdFor(s)) return 'Limited Stock';
   return 'In Stock';
 }
-function syncCatalogItem(sku){
-  if(!CLOUD_MODE || !fsDB) return;   // catalog only makes sense with cloud sync on
-  const s = db.stock.find(x=>x.id===sku);
-  if(!s) return;
-  if(s.discontinued){
-    fsDB.collection('catalog').doc(sku).delete().catch(e=>console.error('catalog sync (remove)', e));
-    return;
-  }
-  const entry = {
-    itemName: s.itemName||'', category: s.category||'', subcategory: s.subcategory||'',
-    material: s.material||'', size: s.size||'', batch: s.batch||'',
-    status: computeCatalogStatus(s), photos: s.catalogPhotos||[], thumbs: s.catalogThumbs||[], featured: !!s.featured,
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-  };
-  fsDB.collection('catalog').doc(sku).set(entry, {merge:true}).catch(e=>console.error('catalog sync', e));
+const R2_PUBLIC_BASE = 'https://pub-ce2a5311865c4b9bbe03bb9309ba0a29.r2.dev/';
+
+/* ===================== PUBLIC CATALOG PUBLISHING =====================
+   The site used to read one document per product, so a visitor cost as many
+   reads as you had products — a few hundred products meant only ~250 visitors
+   a day on Firestore's free quota. Instead the catalog is published as a few
+   bundled documents:
+
+     catalogIndex/index        — category list + counts + cover photo (1 read)
+     catalogPages/<cat>-<n>    — the products of one category (read on demand)
+
+   Photo URLs are stored as bare paths; the R2 domain and the "-thumb" suffix
+   are identical on every one and get rebuilt by the site, which cuts each
+   product from ~917 bytes to ~309 and keeps every page well inside Firestore's
+   1 MB per-document ceiling. Tiles can grow past one page without affecting
+   Ceiling or Sanitaryware, which stay a single small page each. */
+const CATALOG_PAGE_MAX = 1000;   // ~305KB per page — under a third of Firestore's 1MB cap, with room for longer names
+
+function r2PathOf(url){
+  if(!url) return '';
+  const marker = '.r2.dev/';
+  const i = url.indexOf(marker);
+  return i === -1 ? url : url.slice(i + marker.length);
 }
-function syncAllToCatalog(){
+function catalogEntryFor(s){
+  return {
+    sku: s.id,
+    n: s.itemName||'',
+    sub: s.subcategory||'',
+    m: s.material||'',
+    sz: s.size||'',
+    st: computeCatalogStatus(s),
+    f: !!s.featured,
+    p: (s.catalogPhotos||[]).map(r2PathOf),
+    t: (s.catalogThumbs||[]).map(r2PathOf)
+  };
+}
+function catalogSlug(cat){
+  return (cat||'other').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'other';
+}
+
+/* Any stock change republishes that product's category page. Publishing is
+   whole-page rather than per-product because the page IS the unit the site
+   reads — a partial update would leave the page disagreeing with itself. */
+async function publishCatalogCategory(category){
+  if(!CLOUD_MODE || !fsDB || !category) return;
+  const slug = catalogSlug(category);
+  const live = db.stock.filter(s => s.category===category && !s.discontinued);
+  const pages = [];
+  for(let i=0; i<live.length; i+=CATALOG_PAGE_MAX){
+    pages.push(live.slice(i, i+CATALOG_PAGE_MAX).map(catalogEntryFor));
+  }
+  if(!pages.length) pages.push([]);   // keep an empty page so the site gets a clean answer
+
+  try{
+    for(let i=0; i<pages.length; i++){
+      await fsDB.collection('catalogPages').doc(slug+'-'+i).set({
+        category, page:i, items: pages[i],
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    // Clear any pages left behind after the category shrank, so the site never
+    // reads a stale page that still lists removed products.
+    for(let i=pages.length; i<pages.length+5; i++){
+      fsDB.collection('catalogPages').doc(slug+'-'+i).delete().catch(()=>{});
+    }
+    await publishCatalogIndex();
+  }catch(e){ console.error('catalog publish', e); }
+}
+
+async function publishCatalogIndex(){
+  if(!CLOUD_MODE || !fsDB) return;
+  const cats = Array.from(new Set(db.stock.filter(s=>!s.discontinued).map(s=>s.category).filter(Boolean)));
+  const entries = cats.map(cat=>{
+    const live = db.stock.filter(s=>s.category===cat && !s.discontinued);
+    const featured = live.find(s=>s.featured && (s.catalogThumbs||[]).length)
+                  || live.find(s=>(s.catalogThumbs||[]).length)
+                  || live.find(s=>(s.catalogPhotos||[]).length);
+    const cover = featured ? r2PathOf((featured.catalogThumbs||[])[0] || (featured.catalogPhotos||[])[0]) : '';
+    const subs = Array.from(new Set(live.map(s=>s.subcategory).filter(Boolean)));
+    return {
+      category: cat,
+      slug: catalogSlug(cat),
+      count: live.length,
+      pages: Math.max(1, Math.ceil(live.length / CATALOG_PAGE_MAX)),
+      cover,
+      subs
+    };
+  });
+  try{
+    await fsDB.collection('catalogIndex').doc('index').set({
+      categories: entries,
+      photoBase: R2_PUBLIC_BASE,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }catch(e){ console.error('catalog index', e); }
+}
+
+/* Kept for call sites throughout the app: a single product changing means its
+   category page (and the index) need republishing. */
+function syncCatalogItem(sku){
+  if(!CLOUD_MODE || !fsDB) return;
+  const s = db.stock.find(x=>x.id===sku);
+  if(!s || !s.category) return;
+  publishCatalogCategory(s.category);
+}
+
+async function syncAllToCatalog(){
   if(!CLOUD_MODE || !fsDB){ alert('Turn on cloud sync first — the public site reads from there.'); return; }
-  if(!confirm('Publish all '+db.stock.length+' product(s) to the public catalog now?')) return;
-  db.stock.forEach(s=> syncCatalogItem(s.id));
-  logAudit('Catalog synced', db.stock.length+' product(s)');
-  alert('Sync started — items will appear on the public site within a few seconds.');
+  const cats = Array.from(new Set(db.stock.map(s=>s.category).filter(Boolean)));
+  if(!confirm('Publish the whole catalog to the public site now?\n\n'+db.stock.filter(s=>!s.discontinued).length+' product(s) across '+cats.length+' category(ies).')) return;
+  try{
+    for(const cat of cats){ await publishCatalogCategory(cat); }
+    await publishCatalogIndex();
+    logAudit('Catalog published', cats.length+' category(ies)');
+    alert('Published. The public site will show the update within a few seconds.');
+  }catch(e){ alert('Could not publish: '+e.message); }
 }
 window.syncAllToCatalog = syncAllToCatalog;
 
