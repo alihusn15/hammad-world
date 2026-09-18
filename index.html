@@ -220,12 +220,10 @@ function loadDB(){
 let db = loadDB();
 
 /* ===================== USER ROLES =====================
-   IMPORTANT — honest limitation: this hides cost/profit screens from staff on
-   the device they're using. It is NOT bank-grade security — someone determined
-   and technical could bypass it in the browser. It's designed to stop casual
-   viewing (a staff member tapping around and seeing your margins), which is the
-   realistic risk in a shop. For true enforcement you'd need per-user Firebase
-   accounts with server-side rules, which is a much bigger build. */
+   Cloud roles are approved in users/{uid} and enforced by the companion rules.
+   Local PIN mode is a convenience lock only. Approved staff can read stock and
+   Ledger documents (including fields stored within those documents). Expenses,
+   personnel and salary ledgers are separate owner-only collections. */
 const ROLE_KEY = 'hw_role';
 const OWNER_PIN_KEY = 'hw_owner_pin';
 function currentRole(){ return localStorage.getItem(ROLE_KEY) || 'owner'; }
@@ -244,7 +242,7 @@ function switchToStaffMode(){
     alert('Set an owner PIN first (Shop details → Owner PIN), otherwise you won\'t be able to switch back.');
     return;
   }
-  if(!confirm('Switch to Staff mode? Cost prices, profit, expenses and ledgers will be hidden until the owner PIN is entered.')) return;
+  if(!confirm('Switch to Staff mode? Stock, sales, returns, parties and Ledger stay available. Owner actions will require the owner PIN.')) return;
   setRole('staff');
   setScreen('dashboard');
 }
@@ -481,21 +479,7 @@ const titles = {
   openingStockDetail:['Opening stock entry','View & edit this entry']
 };
 
-/* Screens a STAFF account may not open. Costs, margins and business
-   performance live here, so these stay owner-only. This is the app-side half;
-   the server rules are the half that actually enforces data access. */
-const OWNER_ONLY_SCREENS = new Set(['pnl','reports','expenses','addExpense','staffList','staffDetail',
-  'auditLog','users','shopSettings','findDuplicates','openingStockHistory','openingStockDetail','purchase']);
-/* True when the current session may see supplier/purchase money. Staff do not
-   sync the purchases collection at all, so without this the Ledger would show
-   every supplier sitting at zero — worse than not showing them, because it
-   looks like real data. */
-function canSeeSupplierMoney(){ return !CLOUD_MODE || isServerOwner(); }
-function screenAllowed(name){
-  return !(CLOUD_MODE && !isServerOwner() && OWNER_ONLY_SCREENS.has(name));
-}
 function setScreen(name){
-  if(!screenAllowed(name)){ alert('That section is available to the owner account only.'); return; }
   currentScreen = name;
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.screen===name));
   // Fall back rather than throw — a missing title entry used to break navigation
@@ -508,7 +492,6 @@ function setScreen(name){
 document.querySelectorAll('.nav-btn').forEach(b=> b.addEventListener('click', ()=> setScreen(b.dataset.screen)));
 
 function goTo(name, note){
-  if(!screenAllowed(name)){ alert('That section is available to the owner account only.'); return; }
   currentScreen = name;
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('screenTitle').textContent = titles[name][0];
@@ -518,7 +501,10 @@ function goTo(name, note){
 
 function render(){
   const main = document.getElementById('main');
+  const purchaseNav=document.querySelector('[data-screen="purchase"] .nav-lbl');if(purchaseNav)purchaseNav.textContent='Purchase';
+  if(!isOwner() && hwOwnerScreens.has(currentScreen)){main.innerHTML=ownerOnlyNotice();return;}
   if(CLOUD_MODE && (!hwCloudReady || hwCloudError)){main.textContent=hwCloudError||'Loading complete history… Reports and saving will be available when all collections finish loading.';return;}
+  if(CLOUD_MODE && hasPendingOpening() && !isOwner()){main.innerHTML='<div class="card"><h2>Stock import in progress</h2><p>Ask the owner to complete the opening import before posting transactions.</p></div>';return;}
   if(CLOUD_MODE && hasPendingOpening()){main.innerHTML='<div class="card"><h2>Opening import needs completion</h2><p>Some stock may already have been received. Complete the saved import before using reports or entering another transaction.</p><button class="btn" onclick="resumeOpeningImport()">Resume saved import</button><button class="btn btn-ghost" onclick="exportBackup()">Export current records</button></div>';return;}
   // Cloud is configured but nobody is signed in — the login form is the only
   // valid screen, otherwise nav taps would show blank/stale data.
@@ -587,10 +573,7 @@ function renderDashboard(){
         <button class="btn btn-ghost" style="flex:1;" onclick="setScreen('sales')">+ Sale</button>
       </div>
     </div>
-    <div class="card">
-      <h3>Quotations</h3>
-      <button class="btn btn-ghost" onclick="setScreen('quotations')">📄 Quotations / Estimates</button>
-    </div>
+    ${isOwner()?`<div class="card"><h3>Quotations</h3><button class="btn btn-ghost" onclick="setScreen('quotations')">📄 Quotations / Estimates</button></div>`:''}
     ${isOwner() ? `
     <div class="card">
       <h3>Ledger</h3>
@@ -623,17 +606,14 @@ function renderDashboard(){
       <button class="btn btn-primary" style="margin-top:8px;" onclick="ledgerTab='balances';setScreen('fullLedger')">📒 Open Ledger</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('reminders')">🔔 Payment reminders</button>
     </div>
-    <div class="card">
-      <h3>Expenses</h3>
-      <button class="btn btn-ghost" onclick="setScreen('addExpense')">💵 Add Expense</button>
-    </div>
+    <div class="card"><h3>Parties</h3><button class="btn btn-ghost" onclick="setScreen('parties')">+ Add / view suppliers &amp; customers</button></div>
     <div class="card">
       <h3>Staff access</h3>
       ${CLOUD_MODE ? `
-        <div class="step">Signed in as ${escapeHtml(currentUserEmail)}. Profit, expenses, supplier balances and the activity log are restricted to owner accounts.</div>
+        <div class="step">Signed in as ${escapeHtml(currentUserEmail)}. Staff can use stock, new purchases, sales, returns, parties, payments history and the Ledger. Expense and staff records, saved-bill editing and deletion are owner-only.</div>
         <button class="btn btn-ghost" onclick="doLogout()">Sign out</button>
       ` : `
-        <div class="step">Cost prices, profit, expenses and supplier ledgers are hidden. Ask the owner to unlock full access.</div>
+        <div class="step">Staff can use stock, new purchases, sales, returns, parties, payments history and the Ledger. Expense and staff records, saved-bill editing and deletion are owner-only.</div>
         <button class="btn btn-primary" onclick="switchToOwnerMode()">🔓 Enter owner PIN</button>
       `}
     </div>
@@ -643,6 +623,7 @@ function renderDashboard(){
 
 /* ===================== CATEGORY MANAGER ===================== */
 function openCategoryManager(){
+  if(!requireOwner())return;
   document.getElementById('genericModalTitle').textContent = 'Manage categories';
   renderCategoryManagerBody();
   document.getElementById('genericModal').style.display='flex';
@@ -681,6 +662,7 @@ function renderCategoryManagerBody(){
   `;
 }
 async function renameCategory(oldName){
+  if(!requireOwner())return;
   const newName = prompt('Rename category:', oldName);
   if(!newName || !newName.trim() || newName.trim()===oldName) return;
   const trimmed = newName.trim();
@@ -702,6 +684,7 @@ async function renameCategory(oldName){
   renderCategoryManagerBody();
 }
 function deleteCategory(cat){
+  if(!requireOwner())return;
   const inUse = db.stock.some(s=>s.category===cat);
   if(inUse){ alert("Can't delete — some products still use this category. Reassign or edit them first."); return; }
   if(!confirm('Delete category "'+cat+'" and all its subcategories?')) return;
@@ -710,6 +693,7 @@ function deleteCategory(cat){
   renderCategoryManagerBody();
 }
 function deleteSubcategory(cat, sub){
+  if(!requireOwner())return;
   const inUse = db.stock.some(s=>s.category===cat && s.subcategory===sub);
   if(inUse){ alert("Can't delete — some products still use this subcategory. Reassign or edit them first."); return; }
   if(!db.categories[cat]) return;
@@ -721,6 +705,7 @@ window.renameCategory = renameCategory;
 window.deleteCategory = deleteCategory;
 window.deleteSubcategory = deleteSubcategory;
 function syncCategories(){
+  if(!requireOwner())return;
   if(CLOUD_MODE){
     fsDB.collection('categories').doc('main').set({data: db.categories}, {merge:false}).catch(e=>console.error(e));
   } else {
@@ -728,6 +713,7 @@ function syncCategories(){
   }
 }
 function addCategory(){
+  if(!requireOwner())return;
   const name = document.getElementById('newCatName').value.trim();
   if(!name){ return; }
   if(!db.categories[name]) db.categories[name] = {subs:[], materials:[]};
@@ -735,6 +721,7 @@ function addCategory(){
   renderCategoryManagerBody();
 }
 function addSubcategory(cat){
+  if(!requireOwner())return;
   const input = document.getElementById('newSub_'+cat.replace(/[^A-Za-z0-9]/g,''));
   const name = input.value.trim();
   if(!name || !db.categories[cat]) return;
@@ -746,11 +733,12 @@ function addSubcategory(cat){
 /* ===================== PURCHASE ===================== */
 let purchaseScreenMode = 'new';
 function renderPurchase(){
+  if(!isOwner() && purchaseScreenMode==='opening')purchaseScreenMode='new';
   const modeSwitcher = `
     <div class="segment">
       <button class="${escapeHtml(purchaseScreenMode==='new'?'active':'')}" onclick="purchaseScreenMode='new';render()">New purchase</button>
       <button class="${escapeHtml(purchaseScreenMode==='return'?'active':'')}" onclick="purchaseScreenMode='return';render()">Return</button>
-      <button class="${escapeHtml(purchaseScreenMode==='opening'?'active':'')}" onclick="purchaseScreenMode='opening';render()">Opening Stock</button>
+      ${isOwner()?`<button class="${escapeHtml(purchaseScreenMode==='opening'?'active':'')}" onclick="purchaseScreenMode='opening';render()">Opening Stock</button>`:''}
     </div>`;
   if(purchaseScreenMode==='return') return modeSwitcher + renderPurchaseReturn();
   if(purchaseScreenMode==='opening') return modeSwitcher + renderOpeningStock();
@@ -998,6 +986,7 @@ window.savePurchaseReturn = savePurchaseReturn;
    true cost, so P&L and Stock Value stay accurate from day one. */
 let openingStockDraft = { items:[] };
 function renderOpeningStock(){
+  if(!isOwner())return ownerOnlyNotice();
   const cats = Object.keys(db.categories);
   const itemsHtml = openingStockDraft.items.map((it,idx)=>{
     const subs = (db.categories[it.category]&&db.categories[it.category].subs)||[];
@@ -1471,7 +1460,6 @@ async function restoreOrphan(idx){
 }
 window.restoreOrphan = restoreOrphan;
 function renderOpeningStockHistory(){
-  if(!isOwner()) return ownerOnlyNotice();
   const entries = (db.openingStock||[]).slice().sort((a,b)=> (a.date<b.date?1:-1));
   return `
     <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('stock')">← Back to Stock</button>
@@ -1492,7 +1480,7 @@ window.openOpeningStockDetail = openOpeningStockDetail;
 
 window.updateOpeningDetailItem = updateOpeningDetailItem;
 function renderOpeningStockDetail(){
-  if(!isOwner()) return ownerOnlyNotice();
+  if(!isOwner())return renderReadOnlyOpening();
   const o = (db.openingStock||[]).find(x=>x.id===openingDetailCtx?.id);
   if(!o) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('fullLedger')">← Back</button>`;
   const rows = (openingDetailCtx.draftItems||o.items||[]).map((it,idx)=>`
@@ -1588,10 +1576,10 @@ function renderFullLedger(){
     const totalCollect = totalToCollect();  // so these can never drift apart
     body = `
       <div class="stat-grid" style="margin-bottom:12px;">
-        ${canSeeSupplierMoney() ? `<div class="stat"><div class="num" style="color:var(--red-700);">${escapeHtml(fmt(totalPay))}</div><div class="lbl">Total to pay (suppliers)</div></div>` : ''}
+        <div class="stat"><div class="num" style="color:var(--red-700);">${escapeHtml(fmt(totalPay))}</div><div class="lbl">Total to pay (suppliers)</div></div>
         <div class="stat"><div class="num" style="color:var(--clay-700);">${escapeHtml(fmt(totalCollect))}</div><div class="lbl">Total to collect (customers)</div></div>
       </div>
-      ${canSeeSupplierMoney() ? `<div class="card"><h3>Suppliers (${escapeHtml(sup.length)})</h3>${sup.length ? sup.map(row).join('') : `<div class="empty">None${escapeHtml(q?' match that search':'')}.</div>`}</div>` : ''}
+      <div class="card"><h3>Suppliers (${escapeHtml(sup.length)})</h3>${sup.length ? sup.map(row).join('') : `<div class="empty">None${escapeHtml(q?' match that search':'')}.</div>`}</div>
       <div class="card"><h3>Customers (${escapeHtml(cus.length)})</h3>${cus.length ? cus.map(row).join('') : `<div class="empty">None${escapeHtml(q?' match that search':'')}.</div>`}</div>
       <button class="btn btn-ghost" onclick="setScreen('parties')">+ Add / manage parties</button>`;
     return `
@@ -1626,15 +1614,15 @@ function renderFullLedger(){
             <div class="li-right">${escapeHtml(fmt(s.totalAmount||0))}</div>
           </div>`).join('') : `<div class="empty">No sale bills in this period.</div>`}
       </div>
-      ${canSeeSupplierMoney() ? `<div class="card">
+      <div class="card">
         <h3>Purchase bills (${escapeHtml(purchases.length)})</h3>
         ${purchases.length ? purchases.sort((a,b)=>a.date<b.date?1:-1).map(p=>`
           <div class="list-row" style="cursor:pointer;" onclick="openBillDetail('purchase','${inlineValue(p.id)}')">
             <div><div class="li-main">${escapeHtml(p.billNo||p.id)}</div><div class="li-sub">${escapeHtml(p.date)} • ${escapeHtml(p.supplier||'Unknown')}${escapeHtml(p.supplierBillNo?' • their bill: '+p.supplierBillNo:'')}</div></div>
             <div class="li-right">${escapeHtml(fmt((p.totalAmount||0)+(p.totalGst||0)+(p.additionalChargesTotal||0)))}</div>
           </div>`).join('') : `<div class="empty">No purchase bills in this period.</div>`}
-      </div>` : ''}
-      ${canSeeSupplierMoney() ? `<div class="card">
+      </div>
+      <div class="card">
         <h3>Opening stock (${escapeHtml(opening.length)})</h3>
         ${opening.length ? opening.sort((a,b)=>a.date<b.date?1:-1).map(o=>{
           const value = (o.items||[]).reduce((a,it)=> a + (Number(it.qty)||0)*(Number(it.cost)||0), 0);
@@ -1644,7 +1632,7 @@ function renderFullLedger(){
             <div class="li-right">${escapeHtml(fmt(value))}</div>
           </div>`;
         }).join('') : `<div class="empty">No opening stock entries in this period.</div>`}
-      </div>` : ''}`;
+      </div>`;
   }
 
   /* ---------- RETURNS: credit notes (sale) and debit notes (purchase) ---------- */
@@ -1671,14 +1659,14 @@ function renderFullLedger(){
           </div>`;
         }).join('') : `<div class="empty">No sale returns in this period.</div>`}
       </div>
-      ${canSeeSupplierMoney() ? `<div class="card">
+      <div class="card">
         <h3>Purchase returns / debit notes (${escapeHtml(purchRet.length)})</h3>
         ${purchRet.length ? purchRet.sort((a,b)=>a.date<b.date?1:-1).map(r=>`
           <div class="list-row" style="cursor:pointer;" onclick="openPrintPreview('purchaseReturn','${inlineValue(r.id)}')">
             <div><div class="li-main">${escapeHtml(r.billNo||r.id)}</div><div class="li-sub">${escapeHtml(r.date)} • ${escapeHtml((r.items||[]).length)} item(s)</div></div>
             <div class="li-right">${escapeHtml(fmt((r.totalAmount||0)+(r.totalGst||0)))}</div>
           </div>`).join('') : `<div class="empty">No purchase returns in this period.</div>`}
-      </div>` : ''}
+      </div>
       <div class="step">Returns open as a printable note. They can't be edited after saving — a return already moved stock and money, so changing one afterwards would leave both wrong. To correct a mistaken return, record the opposite transaction instead.</div>`;
   }
 
@@ -1823,6 +1811,7 @@ function openStockDetail(stockId){
 window.saveStockAdjustment = saveStockAdjustment;
 
 function saveLowStockThreshold(stockId){
+  if(!requireOwner())return;
   const boxes = Number(document.getElementById('lowStockBoxes').value);
   if(boxes<0 || isNaN(boxes)){ alert('Enter a valid number of boxes.'); return; }
   const s = db.stock.find(x=>x.id===stockId);
@@ -1965,6 +1954,7 @@ function openBillDetail(type, id){
   goTo('billDetail');
 }
 function renderBillDetail(){
+  if(!isOwner())return renderReadOnlyBill();
   const { type, id } = billDetailCtx;
   const isPurchase = type==='purchase';
   const rec = isPurchase ? db.purchases.find(p=>p.id===id) : db.sales.find(s=>s.id===id);
@@ -1978,7 +1968,7 @@ function renderBillDetail(){
         <div class="field"><label>Product name</label><input value="${escapeHtml(it.itemName)}" oninput="updateBillItem(${inlineValue(idx)},'itemName',this.value)"/></div>
         <div class="row2">
           <div class="field"><label>Batch/Shade</label><input value="${escapeHtml(it.batch||'')}" oninput="updateBillItem(${inlineValue(idx)},'batch',this.value)"/></div>
-          <div class="field"><label>Pieces/box</label><input type="number" value="${escapeHtml(it.piecesPerBox||'')}" oninput="updateBillItem(${inlineValue(idx)},'piecesPerBox',this.value)"/></div>
+          <div class="field"><label>Pieces/box</label><input type="number" value="${escapeHtml(it.piecesPerBox||'')}" readonly title="Box size is fixed on a saved bill"/></div>
         </div>
         <div class="row2">
           <div class="field"><label>Qty (boxes)</label><input type="number" value="${escapeHtml(it.qty||'')}" oninput="updateBillItem(${inlineValue(idx)},'qty',this.value)"/></div>
@@ -2027,15 +2017,18 @@ function goBackFromBillDetail(){
   else setScreen('stock');
 }
 function updateBillSupplierNo(val){
+  if(!requireOwner())return;
   if(billDetailCtx.type!=='purchase') return;
   billDetailCtx.draftSupplierBillNo = val;
 }
 window.updateBillSupplierNo = updateBillSupplierNo;
 function updateBillItem(idx, field, val){
+  if(!requireOwner())return;
   const strFields = ['itemName','batch'];
   billDetailCtx.draftItems[idx][field] = strFields.includes(field) ? val : Number(val);
 }
 function removeBillItem(idx){
+  if(!requireOwner())return;
   billDetailCtx.draftItems.splice(idx,1);
   render();
 }
@@ -2148,9 +2141,10 @@ let fbApp=null, fsDB=null;
 function getStoredConfig(){ try{ return JSON.parse(localStorage.getItem(FB_CONFIG_KEY)); }catch(e){ return null; } }
 
 function openCloudModal(){
+  if(!requireOwner())return;
   document.getElementById('genericModalTitle').textContent = 'Connect cloud sync';
   const existing = getStoredConfig();
-  const rules = "rules_version = '2';\nservice cloud.firestore {\n match /databases/{database}/documents {\n  function signedIn() { return request.auth != null; }\n  function owner() { return signedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner'; }\n  function validBill() { return request.resource.data.items is list && request.resource.data.items.size() > 0 && request.resource.data.totalAmount is number && request.resource.data.totalAmount >= 0 && request.resource.data.totalGst is number && request.resource.data.totalGst >= 0; }\n  match /users/{uid} { allow read: if signedIn() && (request.auth.uid == uid || owner()); allow write: if owner(); }\n  match /stock/{id} {\n   allow read: if owner();\n   allow create, update: if owner() && request.resource.data.qty is int && request.resource.data.qty >= 0 && request.resource.data.piecesPerBox is int && request.resource.data.piecesPerBox > 0 && request.resource.data.itemName is string && request.resource.data.get('avgCost', 0) is number && request.resource.data.get('avgCost', 0) >= 0;\n   allow delete: if false;\n  }\n  match /sales/{id} {\n   allow read: if owner();\n   allow create: if owner() && validBill() && request.resource.data.rev == 0;\n   allow update: if owner() && validBill() && request.resource.data.rev == resource.data.get('rev', 0) + 1;\n   allow delete: if false;\n  }\n  match /purchases/{id} {\n   allow read: if owner();\n   allow create: if owner() && validBill() && request.resource.data.rev == 0;\n   allow update: if owner() && validBill() && request.resource.data.rev == resource.data.get('rev', 0) + 1;\n   allow delete: if false;\n  }\n  match /saleReturns/{id} {\n   allow read: if owner();\n   allow create: if owner() && validBill() && getAfter(/databases/$(database)/documents/sales/$(request.resource.data.saleId)).data._returnToken == request.resource.data.operationId;\n   allow update, delete: if false;\n  }\n  match /purchaseReturns/{id} { allow read: if owner(); allow create: if owner() && validBill(); allow update, delete: if false; }\n  match /openingStock/{id} { allow read, create, update: if owner(); allow delete: if false; }\n  match /openingStockChunks/{id} { allow read, create: if owner(); allow update, delete: if false; }\n  match /auditLog/{id} { allow read, create: if owner(); allow update, delete: if false; }\n  match /payments/{id} { allow read: if owner(); allow create: if owner() && request.resource.data.amount is number && request.resource.data.amount > 0; allow update, delete: if false; }\n  match /{collection}/{id} {\n   allow read, write: if owner() && collection in ['meta','categories','settings','parties','expenses','staff','staffLedger','quotations'];\n  }\n }\n}\n";
+  const rules = "rules_version = '2';\nservice cloud.firestore {\n match /databases/{database}/documents {\n  function signedIn() { return request.auth != null; }\n  function role() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role; }\n  function owner() { return signedIn() && role() == 'owner'; }\n  function staff() { return signedIn() && role() == 'staff'; }\n  function member() { return signedIn() && role() in ['owner', 'staff']; }\n  function validBill() {\n   return request.resource.data.items is list && request.resource.data.items.size() > 0\n    && request.resource.data.totalAmount is number && request.resource.data.totalAmount >= 0\n    && request.resource.data.totalGst is number && request.resource.data.totalGst >= 0;\n  }\n  function validStock() {\n   return request.resource.data.qty is int && request.resource.data.qty >= 0\n    && request.resource.data.piecesPerBox is int && request.resource.data.piecesPerBox > 0\n    && request.resource.data.itemName is string\n    && request.resource.data.get('avgCost', 0) is number && request.resource.data.get('avgCost', 0) >= 0;\n  }\n  function postedByStaff(id) {\n   return request.resource.data.operationId == id\n    && request.resource.data.createdBy == request.auth.uid\n    && request.resource.data.stockChanges is map\n    && request.resource.data.stockChanges.size() > 0;\n  }\n  // Staff have no standalone stock editor. Quantity changes must accompany a new\n  // sale/return document, signed by the same staff user in the same atomic write.\n  function staffStockMovement(id) {\n   let d = request.resource.data;\n   let kind = d._staffOperationType;\n   let op = d._staffOperationId;\n   let path = /databases/$(database)/documents/$(kind)/$(op);\n   let record = getAfter(path).data;\n   let delta = d.qty - resource.data.qty;\n   return staff() && validStock()\n    && resource.data.get('mergedInto', '') == ''\n    && d.diff(resource.data).affectedKeys().hasOnly(['qty','avgCost','_hasDownstream','_staffOperationId','_staffOperationType','_staffActor'])\n    && d._hasDownstream == true\n    && (kind == 'saleReturns' ? (record.stockValues[id] is number && record.stockValues[id] >= 0\n       && near(d.avgCost * d.qty, resource.data.qty * resource.data.get('avgCost', resource.data.get('purchaseRate', 0) / resource.data.piecesPerBox) + record.stockValues[id]))\n       : d.get('avgCost', 0) == resource.data.get('avgCost', 0))\n    && kind in ['sales','saleReturns','purchaseReturns'] && op is string\n    && d._staffActor == request.auth.uid && !exists(path)\n    && record.createdBy == request.auth.uid && record.operationId == op\n    && record.stockChanges[id] is int && record.stockChanges[id] == delta\n    && ((kind == 'saleReturns' && delta > 0) || (kind != 'saleReturns' && delta < 0));\n  }\n  function near(a, b) { return a - b < 0.001 && b - a < 0.001; }\n  function staffPurchaseStock(id, creating) {\n   let d = request.resource.data;\n   let op = d._staffOperationId;\n   let path = /databases/$(database)/documents/purchases/$(op);\n   let bill = getAfter(path).data;\n   let priorQty = creating ? 0 : resource.data.qty;\n   let priorCost = creating ? 0 : resource.data.get('avgCost', resource.data.get('purchaseRate', 0) / resource.data.piecesPerBox);\n   return staff() && validStock() && d._staffOperationType == 'purchases'\n    && d._staffActor == request.auth.uid && !exists(path)\n    && bill.operationId == op && bill.createdBy == request.auth.uid\n    && bill.stockChanges[id] is int && bill.stockChanges[id] > 0\n    && bill.stockValues[id] is number && bill.stockValues[id] >= 0\n    && d.qty == priorQty + bill.stockChanges[id]\n    && near(d.avgCost * d.qty, priorQty * priorCost + bill.stockValues[id])\n    && (creating ? (d._historyTracked == true && d.sku == id\n       && d.keys().hasOnly(['sku','itemName','category','subcategory','material','size','brand','batch','piecesPerBox','purchaseRate','mrp','gst','qty','avgCost','_historyTracked','_staffOperationId','_staffOperationType','_staffActor']))\n      : (resource.data.get('mergedInto', '') == ''\n       && d.diff(resource.data).affectedKeys().hasOnly(['qty','avgCost','purchaseRate','_staffOperationId','_staffOperationType','_staffActor'])));\n  }\n  function staffReturnLink(id) {\n   let token = request.resource.data._returnToken;\n   let retPath = /databases/$(database)/documents/saleReturns/$(token);\n   let ret = getAfter(retPath).data;\n   return staff()\n    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['_returnedByLine','_returnSeeded','_returnToken','rev'])\n    && request.resource.data.rev == resource.data.get('rev', 0) + 1\n    && request.resource.data._returnSeeded == true\n    && request.resource.data._returnedByLine is map\n    && !exists(retPath) && ret.saleId == id && ret.operationId == token\n    && ret.createdBy == request.auth.uid\n    && request.resource.data._returnedByLine == ret.returnedByLine;\n  }\n  match /users/{uid} {\n   allow read: if signedIn() && (request.auth.uid == uid || owner());\n   allow create, update: if owner() && request.resource.data.role in ['owner','staff'];\n   allow delete: if owner();\n  }\n  match /stock/{id} {\n   allow read: if member();\n   allow create: if (owner() && validStock()) || staffPurchaseStock(id, true);\n   allow update: if (owner() && validStock()) || staffStockMovement(id) || staffPurchaseStock(id, false);\n   // Keep the existing immutable-product policy: history may reference this ID.\n   allow delete: if false;\n  }\n  match /sales/{id} {\n   allow read: if member();\n   allow create: if validBill() && request.resource.data.rev == 0\n    && (owner() || (staff() && postedByStaff(id)));\n   allow update: if (owner() && validBill() && request.resource.data.rev == resource.data.get('rev',0) + 1)\n    || staffReturnLink(id);\n   allow delete: if false;\n  }\n  match /purchases/{id} {\n   allow read: if member();\n   allow create: if validBill() && request.resource.data.rev == 0\n    && (owner() || (staff() && postedByStaff(id) && request.resource.data.stockValues is map));\n   allow update: if owner() && validBill() && request.resource.data.rev == resource.data.get('rev',0) + 1;\n   allow delete: if false;\n  }\n  match /saleReturns/{id} {\n   allow read: if member();\n   allow create: if validBill()\n    && getAfter(/databases/$(database)/documents/sales/$(request.resource.data.saleId)).data._returnToken == request.resource.data.operationId\n    && (owner() || (staff() && postedByStaff(id)\n      && request.resource.data.partyId == get(/databases/$(database)/documents/sales/$(request.resource.data.saleId)).data.get('partyId', null)\n      && request.resource.data.returnedByLine is map));\n   allow update, delete: if false;\n  }\n  match /purchaseReturns/{id} {\n   allow read: if member();\n   allow create: if validBill() && (owner() || (staff() && postedByStaff(id)));\n   allow update, delete: if false;\n  }\n  match /parties/{id} {\n   allow read: if member();\n   allow create: if member() && request.resource.data.name is string && request.resource.data.name.size() > 0\n    && request.resource.data.type in ['supplier','customer'] && request.resource.data.openingBalance is number;\n   allow update, delete: if owner();\n  }\n  match /payments/{id} {\n   allow read: if member();\n   allow create: if owner() && request.resource.data.amount is number && request.resource.data.amount > 0;\n   allow update, delete: if false;\n  }\n  match /openingStock/{id} {\n   allow read: if member();\n   allow create, update: if owner();\n   allow delete: if false;\n  }\n  match /openingStockChunks/{id} {\n   allow read, create: if owner();\n   allow update, delete: if false;\n  }\n  match /auditLog/{id} {\n   allow read, create: if owner();\n   allow update, delete: if false;\n  }\n  match /meta/{id} {\n   allow read: if owner() || (staff() && (id in ['billCounter_sale','billCounter_purchase'] || id.matches('skuCounter_[A-Z]{1,3}')));\n   allow create: if owner() || (staff() && (id in ['billCounter_sale','billCounter_purchase'] || id.matches('skuCounter_[A-Z]{1,3}'))\n    && request.resource.data.keys().hasOnly(['seq']) && request.resource.data.seq is int && request.resource.data.seq > 0);\n   allow update: if owner() || (staff() && (id in ['billCounter_sale','billCounter_purchase'] || id.matches('skuCounter_[A-Z]{1,3}'))\n    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seq'])\n    && request.resource.data.seq is int && request.resource.data.seq > resource.data.get('seq',0));\n   allow delete: if owner();\n  }\n  match /categories/{id} { allow read: if member() && id == 'main'; allow write: if owner(); }\n  match /settings/{id} { allow read: if member() && id == 'shopInfo'; allow write: if owner(); }\n  match /{collection}/{id} {\n   allow read, write: if owner() && collection in ['expenses','staff','staffLedger','quotations'];\n  }\n }\n}\n";
   document.getElementById('genericModalBody').innerHTML = `
     <div class="step">Connects this app to a free Firebase project so stock, purchases and sales sync live across every device — with proper per-person logins and server-enforced roles.</div>
     <div class="step">
@@ -2170,11 +2164,12 @@ function openCloudModal(){
     ${existing ? `<button class="btn btn-danger" style="margin-top:8px;" onclick="disconnectCloud()">Disconnect & go back to local only</button>` : ''}
     <div class="step" style="margin-top:10px;"><b>Firestore rules — paste ALL of this</b> into Firestore → Rules → Publish:<br>
     <textarea readonly style="width:100%;min-height:220px;padding:10px;border-radius:9px;border:1.5px solid var(--line);font-family:monospace;font-size:10px;">${escapeHtml(rules)}</textarea></div>
-    <div class="step"><b>Important:</b> without step 5 (setting your own role to "owner"), you'll be treated as staff and locked out of your own reports.</div>
+    <div class="step"><b>Important:</b> without step 5 (setting your own role to "owner"), your account will have no database access until a valid owner or staff role is assigned.</div>
   `;
   document.getElementById('genericModal').style.display='flex';
 }
 function connectCloud(){
+  if(!requireOwner())return;
   const raw = document.getElementById('fbConfigInput').value.trim();
   let cfg;
   try{ cfg = JSON.parse(raw); } catch(e){ alert('That doesn\'t look like valid JSON — copy the exact firebaseConfig object.'); return; }
@@ -2183,6 +2178,7 @@ function connectCloud(){
   location.reload();
 }
 function disconnectCloud(){
+  if(!requireOwner())return;
   if(!confirm('Switch back to local-only mode on this device? Your cloud data stays safe — paste the config again later to reconnect.')) return;
   localStorage.removeItem(FB_CONFIG_KEY);
   location.reload();
@@ -2191,7 +2187,7 @@ function updateCloudBadge(){
   const el = document.getElementById('cloudBadge');
   if(!el) return;
   const hasConfig = !!getStoredConfig();
-  if(CLOUD_MODE && !navigator.onLine){ el.textContent='Offline — will sync'; el.classList.remove('on'); el.classList.add('offline'); }
+  if(CLOUD_MODE && !navigator.onLine){ el.textContent='Offline — reconnect to save'; el.classList.remove('on'); el.classList.add('offline'); }
   else if(CLOUD_MODE){ el.textContent='Cloud sync on'; el.classList.add('on'); el.classList.remove('offline'); }
   else if(hasConfig){ el.textContent='Signed out'; el.classList.remove('on'); el.classList.add('offline'); }
   else { el.textContent='Local only'; el.classList.remove('on'); el.classList.remove('offline'); }
@@ -2228,12 +2224,6 @@ function showCloudConnectError(message){
    fetch owner-only data, no matter what they do in the browser. */
 let serverRole = null;   // 'owner' | 'staff' | null (not signed in)
 let currentUserEmail = '';
-/* Operations a signed-in STAFF account may perform in cloud mode. Anything
-   not listed here is owner-only and is refused both here and by the Firestore
-   rules on the server, so blocking is not merely a hidden screen.
-   Deliberately excluded: purchase, purchaseReturn, billEdit, expense, merge,
-   opening, openingEdit, stockAdjust, staffEntry, backup, restore, publish. */
-const STAFF_OPS = new Set(['sale','saleReturn','payment']);
 function isServerOwner(){ return serverRole === 'owner'; }
 
 function initCloudIfConfigured(){
@@ -2252,11 +2242,11 @@ function initCloudIfConfigured(){
     if(user){
       currentUserEmail = user.email || '';
       try{
-        const roleDoc = await fsDB.collection('users').doc(user.uid).get();
-        serverRole = roleDoc.exists ? (roleDoc.data().role || 'staff') : 'staff';
+        const roleDoc = await fsDB.collection('users').doc(user.uid).get({source:'server'});
+        serverRole = roleDoc.exists && ['owner','staff'].includes(roleDoc.data().role) ? roleDoc.data().role : null;
       }catch(e){
         console.error('Could not read role', e);
-        serverRole = 'staff'; // fail closed — least privilege if role can't be read
+        serverRole = null; // no database access until the owner assigns a valid role
       }
       CLOUD_MODE = true;
       if(serverRole !== 'owner'){
@@ -2291,7 +2281,7 @@ function showLoginScreen(){
   main.innerHTML = `
     <div class="card">
       <h3>Sign in</h3>
-      <div class="step">Sign in with an owner account. This management app is restricted to owners to protect purchase costs and financial records.</div>
+      <div class="step">Sign in with your owner or staff account. The owner must assign your account a role before access is enabled.</div>
       <div class="field"><label>Email</label><input id="loginEmail" type="email" autocomplete="username"/></div>
       <div class="field"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password"/></div>
       <button class="btn btn-primary" onclick="doLogin()">Sign in</button>
@@ -2323,6 +2313,7 @@ window.doLogout = doLogout;
 
 let cloudUnsubscribers = [];
 function detachCloudListeners(){
+  hwListenerEpoch++;
   cloudUnsubscribers.forEach(fn=>{ try{ fn(); }catch(e){} });
   cloudUnsubscribers = [];
 }
@@ -2378,23 +2369,14 @@ function renderPartiesList(){
     <div class="card"><h3>Customers (${escapeHtml(customers.length)})</h3>${customers.length ? customers.map(row).join('') : `<div class="empty">None added yet.</div>`}</div>
   `;
 }
-function saveParty(){
-  const name = document.getElementById('newPartyName').value.trim();
-  if(!name){ alert('Enter a name.'); return; }
-  const phone = document.getElementById('newPartyPhone').value.trim();
-  const address = document.getElementById('newPartyAddress').value.trim();
-  const gstin = document.getElementById('newPartyGstin').value.trim();
-  const openingBalance = Number(document.getElementById('newPartyOpening').value)||0;
-  const party = {name, phone, address, gstin, openingBalance, type: partyFormType};
-  if(CLOUD_MODE){
-    fsDB.collection('parties').add(Object.assign({}, party, {createdAt:firebase.firestore.FieldValue.serverTimestamp()})).catch(e=>alert('Could not save: '+e.message));
-  } else {
-    party.id = nextId('PTY');
-    db.parties.push(party);
-    saveDB(db);
-    render();
-  }
-}
+async function saveParty(){return guarded('partyCreate',async()=>{
+ const name=document.getElementById('newPartyName').value.trim();if(!name)throw Error('Enter a name.');
+ if(!['supplier','customer'].includes(partyFormType))throw Error('Choose supplier or customer.');
+ const party={id:uid(),name,phone:document.getElementById('newPartyPhone').value.trim(),address:document.getElementById('newPartyAddress').value.trim(),gstin:document.getElementById('newPartyGstin').value.trim(),openingBalance:numeric(document.getElementById('newPartyOpening').value,'Opening balance',-Number.MAX_SAFE_INTEGER),type:partyFormType,...actorFields()};
+ if(CLOUD_MODE){await fsDB.collection('parties').doc(party.id).set({...party,createdAt:firebase.firestore.FieldValue.serverTimestamp()});upsert('parties',party);}
+ else localCommit(state=>{state.parties.push(party);auditIn(state,'Party created',party.name);});
+ alert('Party saved.');render();return party;
+});}
 let openPartyId = null;
 function openPartyDetail(id){ openPartyId = id; goTo('partyDetail'); }
 /* Outstanding balance: for a supplier, positive = you owe them (Creditor).
@@ -2599,6 +2581,7 @@ async function handlePhotoUpload(sku, fileInput){
   render();
 }
 function removeProductPhoto(sku, idx){
+  if(!requireOwner())return;
   const s = db.stock.find(x=>x.id===sku);
   if(!s || !s.catalogPhotos) return;
   if(!confirm('Remove this photo from the product? (It stays in R2 storage — ask the owner to delete it there later if you want to fully free the space.)')) return;
@@ -2613,6 +2596,7 @@ function removeProductPhoto(sku, idx){
   render();
 }
 function toggleComingSoon(sku, checked){
+  if(!requireOwner())return;
   const s = db.stock.find(x=>x.id===sku);
   if(!s) return;
   s.comingSoon = checked;
@@ -2625,6 +2609,7 @@ function toggleComingSoon(sku, checked){
   render();
 }
 function toggleFeatured(sku, checked){
+  if(!requireOwner())return;
   const s = db.stock.find(x=>x.id===sku);
   if(!s) return;
   s.featured = checked;
@@ -2648,6 +2633,7 @@ function toggleFeatured(sku, checked){
 }
 window.toggleFeatured = toggleFeatured;
 function toggleDiscontinued(sku, checked){
+  if(!requireOwner())return;
   const s = db.stock.find(x=>x.id===sku);
   if(!s) return;
   s.discontinued = checked;
@@ -2672,10 +2658,6 @@ function renderPartyDetail(){
   const party = db.parties.find(p=>p.id===openPartyId);
   if(!party) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('parties')">← Back</button>`;
   const isSupplier = party.type==='supplier';
-  if(!isOwner() && isSupplier){
-    return `<button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('dashboard')">← Back</button>
-      <div class="card"><h3>Not available</h3><div class="step">Supplier ledgers are restricted to owner accounts.</div></div>`;
-  }
   const bal = partyBalance(party.id);
   const bills = isSupplier
     ? db.purchases.filter(p=>p.partyId===party.id).map(p=>({id:p.id, type:'purchase', billNo:p.billNo, date:p.date, amt:p.totalAmount+p.totalGst+(p.additionalChargesTotal||0), paid:p.amountPaid}))
@@ -2685,7 +2667,7 @@ function renderPartyDetail(){
   return `
     <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('parties')">← Back to Ledger</button>
     <div class="card">
-      ${editingPartyDetails ? `
+      ${editingPartyDetails && isOwner() ? `
         <h3>Edit details</h3>
         <div class="field"><label>Name</label><input id="editPartyName" value="${escapeHtml(party.name)}"/></div>
         <div class="row2">
@@ -2725,6 +2707,7 @@ function renderPartyDetail(){
       <button class="btn btn-primary" onclick="recordPayment('${inlineValue(party.id)}')">${escapeHtml(bal<0?'Record refund against credit':isSupplier?'Record payment made':'Record payment received')}</button>
     </div>
     ` : ''}
+    <div class="card"><h3>Payments</h3>${db.payments.filter(p=>p.partyId===party.id).map(p=>`<div class="list-row"><div><div class="li-main">${escapeHtml(p.direction==='refund'?'Refund':'Payment')}</div><div class="li-sub">${escapeHtml(p.date)} · ${escapeHtml(p.note||'')}</div></div><div>${escapeHtml(fmt(p.amount))}</div></div>`).join('')||'<div class="empty">No payments recorded.</div>'}</div>
     <div class="card">
       <h3>Bills (${escapeHtml(bills.length)})</h3>
       ${bills.length ? bills.map(b=>`
@@ -2736,6 +2719,7 @@ function renderPartyDetail(){
   `;
 }
 function savePartyEdits(partyId){
+  if(!requireOwner())return;
   const name = document.getElementById('editPartyName').value.trim();
   if(!name){ alert('Name cannot be empty.'); return; }
   const updates = {
@@ -2756,6 +2740,7 @@ function savePartyEdits(partyId){
   render();
 }
 function deleteParty(partyId){
+  if(!requireOwner())return;
   const party = db.parties.find(p=>p.id===partyId);
   if(!party) return;
   const hasBills = party.type==='supplier'
@@ -2793,6 +2778,7 @@ function ownerOnlyNotice(){
    business expense; no viewing, filtering, or totals. That stays behind
    the owner-only report (via Reports → View full expense tracker). */
 function renderAddExpense(){
+  if(!isOwner())return ownerOnlyNotice();
   editingExpenseId = null;
   const today = todayStr();
   return `
@@ -2898,6 +2884,7 @@ function renderExpenses(){
 }
 
 function deleteExpense(id){
+  if(!requireOwner())return;
   if(!confirm('Delete this expense entry?')) return;
   if(CLOUD_MODE){
     fsDB.collection('expenses').doc(id).delete().catch(e=>alert('Could not delete: '+e.message));
@@ -2908,6 +2895,7 @@ function deleteExpense(id){
   }
 }
 function exportExpensesCsv(){
+  if(!requireOwner())return;
   const rows = [['Date','Category','Amount','Bill Ref','Note']];
   db.expenses.forEach(e=> rows.push([e.date, e.category, e.amount, e.billRef||'', e.note||'']));
   const csv = rows.map(r=> r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
@@ -2957,6 +2945,7 @@ function renderStaffList(){
   `;
 }
 function saveStaff(){
+  if(!requireOwner())return;
   const name = document.getElementById('newStaffName').value.trim();
   if(!name){ alert('Enter a name.'); return; }
   const role = document.getElementById('newStaffRole').value.trim();
@@ -3036,6 +3025,7 @@ function renderStaffDetail(){
 }
 
 function saveStaffEdits(staffId){
+  if(!requireOwner())return;
   const name = document.getElementById('editStaffName').value.trim();
   if(!name){ alert('Name cannot be empty.'); return; }
   const updates = {
@@ -3055,6 +3045,7 @@ function saveStaffEdits(staffId){
   render();
 }
 function deleteStaff(staffId){
+  if(!requireOwner())return;
   const staff = db.staff.find(s=>s.id===staffId);
   if(!staff) return;
   const hasEntries = db.staffLedger.some(e=>e.staffId===staffId);
@@ -3146,7 +3137,8 @@ function renderPnL(){
   const netCogs = cogs - saleReturnCostReversal;
   const grossProfit = netRevenue - netCogs;
   const operatingExpenses = expenses.reduce((a,e)=>a+Number(e.amount||0),0);
-  const netProfit = grossProfit - operatingExpenses;
+  const purchaseReturnVariance = purchaseReturns.reduce((sum,r)=>sum+(r.inventoryCost!=null?Number(r.totalAmount||0)-Number(r.inventoryCost):0),0);
+  const netProfit = grossProfit - operatingExpenses + purchaseReturnVariance;
 
   // Output GST owed must be reduced by tax reversed on sale returns —
   // previously a fully-returned sale still showed its original output GST
@@ -3181,6 +3173,8 @@ function renderPnL(){
       <div class="total-line grand"><span>Gross Profit</span><span>${escapeHtml(fmt(grossProfit))}</span></div>
       <div class="total-line" style="margin-top:10px;"><span>Customer charges included in revenue</span><span>${escapeHtml(fmt(saleChargesTotal))}</span></div>
       <div class="total-line"><span>Operating expenses (Rent, Salary, etc.)</span><span>-${escapeHtml(fmt(operatingExpenses))}</span></div>
+      <div class="total-line"><span>Supplier return gain / loss</span><span>${escapeHtml(fmt(purchaseReturnVariance))}</span></div>
+      ${purchaseReturns.some(r=>r.inventoryCost==null)?'<div class="step">Older supplier returns lack recorded inventory cost; their gain/loss is not included.</div>':''}
       <div class="total-line grand" style="color:${escapeHtml(netProfit<0?'var(--red-700)':'var(--green-heading)')};"><span>Net Profit${escapeHtml(netProfit<0?' (Loss)':'')}</span><span>${escapeHtml(fmt(netProfit))}</span></div>
     </div>
 
@@ -3322,6 +3316,7 @@ window.updateQuoteRate = updateQuoteRate;
 function removeQuoteItem(idx){ quoteDraft.items.splice(idx,1); render(); }
 function updateQuoteItem(idx,field,val){ quoteDraft.items[idx][field]=Number(val); render(); }
 function saveQuotation(){
+  if(!requireOwner())return;
   if(!quoteDraft.items.length){ alert('Add at least one item.'); return; }
   const total = quoteDraft.items.reduce((a,it)=>{
     const gross = Number(it.boxQty||0)*Number(it.boxPrice) + Number(it.pieceQty||0)*Number(it.piecePrice);
@@ -3354,6 +3349,7 @@ function saveQuotation(){
   }
 }
 function convertQuoteToSale(quoteId){
+  if(!requireOwner())return;
   const q = (db.quotations||[]).find(x=>x.id===quoteId);
   if(!q){ alert('Quotation not found.'); return; }
   if(!confirm('Convert '+q.quoteNo+' into a sale bill? It will open in the Sale screen for you to confirm.')) return;
@@ -3497,8 +3493,8 @@ function renderUsers(){
     </div>
     <div class="card">
       <h3>What staff can and cannot see</h3>
-      <div class="step"><b>Cloud management:</b> owner accounts can manage stock, bills and accounts. Staff accounts cannot access this management database.</div>
-      <div class="step"><b>Protected:</b> purchase costs, financial records and stock writes require an owner account under the supplied server rules.</div>
+      <div class="step"><b>Staff:</b> read stock and Ledger records; create sales, customer/supplier returns and parties; read payments.</div>
+      <div class="step"><b>Owner-only:</b> purchase entry/editing, editing saved records, payments entry, expenses, staff records, staff ledger, configuration and deletion. Staff stock changes are limited to posting sales/returns.</div>
       <div class="step"><b>Local mode:</b> the device PIN is a convenience lock. Anyone with access to browser storage can access local records.</div>
     </div>
   `;
@@ -3509,6 +3505,7 @@ function renderUsers(){
    spin up a second, throwaway connection to the same Firebase project just
    for this one step, then close it. No Cloud Function or paid plan needed. */
 async function createStaffAccount(){
+  if(!requireOwner())return;
   const name = document.getElementById('quickUserName').value.trim();
   const email = document.getElementById('quickUserEmail').value.trim();
   const password = document.getElementById('quickUserPassword').value;
@@ -3539,6 +3536,7 @@ async function createStaffAccount(){
 window.createStaffAccount = createStaffAccount;
 
 function saveUserRole(){
+  if(!requireOwner())return;
   const uid = document.getElementById('newUserUid').value.trim();
   const name = document.getElementById('newUserName').value.trim();
   const role = document.getElementById('newUserRole').value;
@@ -3572,6 +3570,7 @@ function renderShopSettings(){
   `;
 }
 function saveShopInfo(){
+  if(!requireOwner())return;
   const info = {
     name: document.getElementById('shopName').value.trim() || 'Hammad World',
     gstin: document.getElementById('shopGstin').value.trim(),
@@ -3588,6 +3587,7 @@ function saveShopInfo(){
   setScreen('dashboard');
 }
 function saveOwnerPin(){
+  if(!requireOwner())return;
   const pin = document.getElementById('ownerPin').value.trim();
   if(pin && pin.length<4){ alert('Use at least 4 digits.'); return; }
   localStorage.setItem(OWNER_PIN_KEY, pin);
@@ -3741,9 +3741,22 @@ document.addEventListener('keydown', function(e){
 });
 
 /* HAMMAD WORLD reliability revision 2026-09-18. Financial amounts are INR. */
-const HW_VERSION='2026.09.18-r3';
+const HW_VERSION='2026.09.18-r5-purchase';
 let hwExpectedLocal=localStorage.getItem(DB_KEY), hwCloudReady=false, hwCloudError='', hwBusy=new Set(), hwPendingOpenings=[];
 const hwCollections=['stock','sales','purchases','saleReturns','purchaseReturns','openingStock','parties','payments','expenses','staff','staffLedger','quotations','auditLog'];
+// Staff see the transaction records required by the complete Ledger, but never
+// subscribe to expenses, personnel, salary ledgers, quotations or audit history.
+const hwStaffCollections=['stock','sales','purchases','saleReturns','purchaseReturns','openingStock','parties','payments'];
+const hwStaffActions=new Set(['purchase','sale','saleReturn','purchaseReturn','partyCreate','publish']);
+const hwOwnerScreens=new Set(['expenses','addExpense','staffList','staffDetail','pnl','shopSettings','quotations','auditLog','users','findDuplicates']);
+let hwListenerEpoch=0;
+function isApprovedUser(){return CLOUD_MODE?['owner','staff'].includes(serverRole):['owner','staff'].includes(currentRole());}
+function canPerform(action){return isApprovedUser() && (isOwner() || hwStaffActions.has(action));}
+function requireOwner(){if(isOwner())return true;alert('This action is restricted to owner accounts.');return false;}
+function actorFields(){return CLOUD_MODE?{createdBy:firebase.auth().currentUser.uid}:{};}
+function staffStockUpdate(qty,id,type,extra={}){const change={qty,_hasDownstream:true,...extra};return isServerOwner()?change:{...change,_staffOperationId:id,_staffOperationType:type,_staffActor:firebase.auth().currentUser.uid};}
+function stockChanges(needs,sign){return Object.fromEntries(Object.entries(needs).map(([id,n])=>[id,sign*n]));}
+
 function clone(v){return JSON.parse(JSON.stringify(v));}
 function amount(v){const n=Number(v);if(!Number.isFinite(n))throw Error('Enter a finite amount.');return Math.round((n+Number.EPSILON)*100)/100;}
 function numeric(v,label,min=0,max=Number.MAX_SAFE_INTEGER){const n=Number(v??0);if(!Number.isFinite(n)||n<min||n>max)throw Error(label+' must be between '+min+' and '+max+'.');return n;}
@@ -3759,7 +3772,7 @@ function same(a,b){return JSON.stringify(a)===JSON.stringify(b);}
 function auditIn(state,action,detail){state.auditLog.push({id:uid(),action,detail,role:CLOUD_MODE?serverRole:currentRole(),at:new Date().toISOString()});}
 function saveDB(state){const raw=localStorage.getItem(DB_KEY);if(typeof hwExpectedLocal!=='undefined'&&raw!==hwExpectedLocal)throw Error('Another tab changed this database. Reload before saving; your change was not committed.');const encoded=JSON.stringify(state);localStorage.setItem(DB_KEY,encoded);hwExpectedLocal=encoded;}
 function localCommit(fn){const before=clone(db);try{const result=fn(db);saveDB(db);return result;}catch(e){db=before;throw e;}}
-async function guarded(key,fn){if(hwBusy.has(key))return;if(hwBusy.size&&key!=='publish'){alert('Another operation is still saving. Wait for it to finish.');return;}hwBusy.add(key);try{if(CLOUD_MODE&&(!hwCloudReady||hwCloudError))throw Error(hwCloudError||'Wait until the complete database has loaded.');if(CLOUD_MODE&&!isServerOwner()&&!STAFF_OPS.has(key))throw Error('This action is restricted to the owner account.');if(CLOUD_MODE&&!navigator.onLine)throw Error('Reconnect before saving. This operation has not been committed.');if(CLOUD_MODE&&!['opening','backup'].includes(key)&&hasPendingOpening())throw Error('An opening import is unfinished. Resume it before continuing.');return await fn();}catch(e){console.error(e);alert(e.message||String(e));}finally{hwBusy.delete(key);}}
+async function guarded(key,fn){if(hwBusy.has(key))return;if(hwBusy.size&&key!=='publish'){alert('Another operation is still saving. Wait for it to finish.');return;}hwBusy.add(key);try{if(CLOUD_MODE&&(!hwCloudReady||hwCloudError))throw Error(hwCloudError||'Wait until the complete database has loaded.');if(!canPerform(key))throw Error('This action is restricted to owner accounts.');if(CLOUD_MODE&&!navigator.onLine)throw Error('Reconnect before saving. This operation has not been committed.');if(CLOUD_MODE&&!['opening','backup'].includes(key)&&hasPendingOpening())throw Error('An opening import is unfinished. Resume it before continuing.');return await fn();}catch(e){console.error(e);alert(e.message||String(e));}finally{hwBusy.delete(key);}}
 function validateCommonDraft(d){numeric(d.billDiscount||0,'Bill discount',0,100);numeric(d.amountPaid||0,'Amount paid');if(d.actualAmountPaid!==''&&d.actualAmountPaid!=null)numeric(d.actualAmountPaid,'Actual amount paid');for(const c of d.additionalCharges||[])numeric(c.amount,'Additional charge');if(d.partyId&&!db.parties.some(p=>p.id===d.partyId))throw Error('Select an existing party.');}
 function checkSale(items){if(!Array.isArray(items)||!items.length)throw Error('Add at least one item.');const ids=new Set();for(const it of items){safeId(it.stockId);if(!units(it))throw Error('Every sale line needs a positive quantity.');numeric(it.boxPrice,'Box price');numeric(it.piecePrice,'Piece price');numeric(it.discount||0,'Line discount',0,100);numeric(it.gst||0,'GST rate',0,100);if(it.lineId&&ids.has(it.lineId))throw Error('Duplicate sale line ID. Reopen this bill.');if(it.lineId)ids.add(it.lineId);}}
 function validateSaleRows(items){try{checkSale(items);validateCommonDraft(saleDraft);return true;}catch(e){alert(e.message);return false;}}
@@ -3768,28 +3781,30 @@ function validatePurchaseRows(items){try{checkPurchase(items);validateCommonDraf
 function validateOpeningStockRows(items){try{checkPurchase(items,true);return true;}catch(e){alert(e.message);return false;}}
 function aggregateSaleNeeds(items){const result=Object.create(null);for(const it of items)result[it.stockId]=(result[it.stockId]||0)+units(it);return result;}
 function saleTotals(items,d){let total=0,gst=0,discount=0;const keep=1-numeric(d.billDiscountPct??d.billDiscount??0,'Bill discount',0,100)/100;for(const it of items){const gross=Number(it.boxQty||0)*Number(it.boxPrice)+Number(it.pieceQty||0)*Number(it.piecePrice);const disc=gross*Number(it.discount||0)/100;const br=gstBreakdown((gross-disc)*keep,Number(it.gst||0),d.gstMode||'included');total+=br.total;gst+=br.gst;discount+=disc+(gross-disc)*(1-keep);}const charges=(d.additionalCharges||[]).reduce((n,c)=>n+numeric(c.amount,'Additional charge'),0);return {totalAmount:amount(total+charges),totalGst:amount(gst),totalDiscount:amount(discount),additionalChargesTotal:amount(charges),billDiscountPct:amount((1-keep)*100)};}
-function purchaseTotals(items,d){let taxable=0,gst=0;const lines=items.map(it=>{const br=gstBreakdown(Number(it.qty)*Number(it.rate),Number(it.gst||0),d.gstMode||'excluded');taxable+=br.taxable;gst+=br.gst;return br.taxable;});const charges=(d.additionalCharges||[]).reduce((n,c)=>n+numeric(c.amount,'Additional charge'),0);const actual=d.actualAmountPaid!==''&&d.actualAmountPaid!=null?numeric(d.actualAmountPaid,'Actual amount paid'):taxable+gst+charges;const gap=Math.max(0,actual-taxable-gst-charges);const count=items.reduce((n,it)=>n+units(it,'purchase'),0);return {totalAmount:amount(taxable),totalGst:amount(gst),additionalChargesTotal:amount(charges),actualAmountPaid:amount(actual),landed:lines.map((n,i)=>n+(charges+gap)*(taxable>0?n/taxable:units(items[i],'purchase')/count))};}
+function purchaseTotals(items,d){let taxable=0,gst=0;const lines=items.map(it=>{const br=gstBreakdown(Number(it.qty)*Number(it.rate),Number(it.gst||0),d.gstMode||'excluded');taxable+=br.taxable;gst+=br.gst;return br.taxable;});const charges=(d.additionalCharges||[]).reduce((n,c)=>n+numeric(c.amount,'Additional charge'),0);const actual=d.actualAmountPaidExplicit!==false&&d.actualAmountPaid!==''&&d.actualAmountPaid!=null?numeric(d.actualAmountPaid,'Actual amount paid'):taxable+gst+charges;const gap=Math.max(0,actual-taxable-gst-charges);const count=items.reduce((n,it)=>n+units(it,'purchase'),0);return {totalAmount:amount(taxable),totalGst:amount(gst),additionalChargesTotal:amount(charges),actualAmountPaid:amount(actual),landed:lines.map((n,i)=>n+(charges+gap)*(taxable>0?n/taxable:units(items[i],'purchase')/count))};}
 function productMeta(it,id){return {sku:id,itemName:String(it.itemName).trim(),category:it.category,subcategory:it.subcategory||'',material:it.material||'',size:it.size||'',brand:it.brand||'',batch:it.batch||'',piecesPerBox:Number(it.piecesPerBox),purchaseRate:Number(it.rate??it.cost??0),mrp:Number(it.mrp)>0?Number(it.mrp):Number(it.rate??it.cost??0),gst:Number(it.gst)||0};}
 async function resolvePurchaseItems(items,cloud){const seen=new Map();for(const it of items){let s=it.sku?stockById(it.sku):findStockRow(it.itemName,it.batch);if(s?.mergedInto)s=stockById(s.id);const key=String(it.itemName).trim().toLowerCase()+'\u0000'+String(it.batch||'').trim().toLowerCase();it.sku=s?.id||seen.get(key)|| (cloud?await nextSkuCloud(it.category):nextSku(it.category));seen.set(key,it.sku);}}
 function groupedIncoming(items,landed){const g=Object.create(null);items.forEach((it,i)=>{const x=g[it.sku]||(g[it.sku]={qty:0,value:0,item:it});if(Number(x.item.piecesPerBox)!==Number(it.piecesPerBox))throw Error('One product cannot have different box sizes on the same entry.');x.qty+=units(it,'purchase');x.value+=landed[i];x.item=it;});return g;}
-function incomingStock(s,g,id){if(s?.mergedInto)throw Error('This product was merged. Reload and select the surviving product.');if(s&&s.qty>0&&Number(s.piecesPerBox)!==Number(g.item.piecesPerBox))throw Error('Use a separate product for a different box size.');const prior=numeric(s?.qty||0,'Current stock');return {...productMeta(g.item,id),qty:prior+g.qty,avgCost:(prior* (s?avgOf(s):0)+g.value)/(prior+g.qty)};}
+function incomingStock(s,g,id){if(s?.mergedInto)throw Error('This product was merged. Reload and select the surviving product.');if(s&&Number(s.piecesPerBox)!==Number(g.item.piecesPerBox))throw Error('Use a separate product for a different box size.');const prior=numeric(s?.qty||0,'Current stock');return {...(s&&!isOwner()?{purchaseRate:Number(g.item.rate)}:productMeta(g.item,id)),...(!s?{_historyTracked:true}:{}),qty:prior+g.qty,avgCost:(prior* (s?avgOf(s):0)+g.value)/(prior+g.qty)};}
 function assertTxnSize(ids){if(ids.length>400)throw Error('Split this entry into batches of at most 400 different products. There is no limit on the number of bills.');}
-async function saveSale(){return guarded('sale',async()=>{checkSale(saleDraft.items);validateCommonDraft(saleDraft);const d=clone(saleDraft);d.items=ensureLines(d.items);for(const it of d.items){const s=stockById(it.stockId);if(!s)throw Error('Product no longer exists.');it.stockId=s.id;}const totals=saleTotals(d.items,d),needs=aggregateSaleNeeds(d.items);if(!saleDraft.operationId)saleDraft.operationId=uid();const operationId=saleDraft.operationId;let saved;
- if(CLOUD_MODE){const billNo=await nextBillNoCloud('sale'),ref=fsDB.collection('sales').doc(operationId);await fsDB.runTransaction(async tx=>{const existing=await tx.get(ref);if(existing.exists){saved={id:ref.id,...existing.data()};return;}const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id));const snaps=await Promise.all(refs.map(r=>tx.get(r)));let quoteSnap=null,quoteRef=null;if(d.fromQuoteId){quoteRef=fsDB.collection('quotations').doc(d.fromQuoteId);quoteSnap=await tx.get(quoteRef);if(!quoteSnap.exists||quoteSnap.data().status==='converted')throw Error('This quotation is already converted or missing.');}const info={};snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Not enough stock; reload the product list.');info[ids[i]]=s.data();});d.items.forEach(it=>it.costAtSale=avgOf(info[it.stockId]));saved={id:ref.id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId,createdAt:firebase.firestore.FieldValue.serverTimestamp()};refs.forEach((r,i)=>tx.update(r,{qty:info[ids[i]].qty-needs[ids[i]]}));tx.set(ref,saved);if(quoteRef)tx.update(quoteRef,{status:'converted',convertedToBill:billNo});});upsert('sales',saved);}
- else localCommit(state=>{if(d.fromQuoteId){const q=state.quotations.find(q=>q.id===d.fromQuoteId);if(!q||q.status==='converted')throw Error('This quotation is already converted or missing.');}for(const [id,need]of Object.entries(needs)){if(stockById(id,state).qty<need)throw Error('Not enough stock for this sale.');}d.items.forEach(it=>it.costAtSale=avgOf(stockById(it.stockId,state)));const id=nextId('SAL'),billNo=nextBillNo('sale');saved={id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId};for(const [sid,need]of Object.entries(needs))stockById(sid,state).qty-=need;state.sales.push(saved);if(d.fromQuoteId)Object.assign(state.quotations.find(q=>q.id===d.fromQuoteId),{status:'converted',convertedToBill:billNo});auditIn(state,'Sale created',billNo);});saleDraft={customer:'',partyId:null,paidInFull:true,amountPaid:0,gstMode:'included',items:[],additionalCharges:[],billDiscount:0};syncCatalogItem();openPrintPreview('sale',saved.id);});}
+async function saveSale(){return guarded('sale',async()=>{checkSale(saleDraft.items);validateCommonDraft(saleDraft);const d=clone(saleDraft);if(d.fromQuoteId&&!isOwner())throw Error('Quotation conversion is owner-only.');d.items=ensureLines(d.items);for(const it of d.items){const s=stockById(it.stockId);if(!s)throw Error('Product no longer exists.');it.stockId=s.id;}const totals=saleTotals(d.items,d),needs=aggregateSaleNeeds(d.items);if(!saleDraft.operationId)saleDraft.operationId=uid();const operationId=saleDraft.operationId;let saved;
+ if(CLOUD_MODE){const billNo=await nextBillNoCloud('sale'),ref=fsDB.collection('sales').doc(operationId);await fsDB.runTransaction(async tx=>{const existing=await tx.get(ref);if(existing.exists){saved={id:ref.id,...existing.data()};return;}const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id));const snaps=await Promise.all(refs.map(r=>tx.get(r)));let quoteSnap=null,quoteRef=null;if(d.fromQuoteId){quoteRef=fsDB.collection('quotations').doc(d.fromQuoteId);quoteSnap=await tx.get(quoteRef);if(!quoteSnap.exists||quoteSnap.data().status==='converted')throw Error('This quotation is already converted or missing.');}const info={};snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Not enough stock; reload the product list.');info[ids[i]]=s.data();});d.items.forEach(it=>it.costAtSale=avgOf(info[it.stockId]));saved={id:ref.id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId,...actorFields(),stockChanges:stockChanges(needs,-1),createdAt:firebase.firestore.FieldValue.serverTimestamp()};refs.forEach((r,i)=>tx.update(r,staffStockUpdate(info[ids[i]].qty-needs[ids[i]],operationId,'sales')));tx.set(ref,saved);if(quoteRef)tx.update(quoteRef,{status:'converted',convertedToBill:billNo});});upsert('sales',saved);}
+ else localCommit(state=>{if(d.fromQuoteId){const q=state.quotations.find(q=>q.id===d.fromQuoteId);if(!q||q.status==='converted')throw Error('This quotation is already converted or missing.');}for(const [id,need]of Object.entries(needs)){if(stockById(id,state).qty<need)throw Error('Not enough stock for this sale.');}d.items.forEach(it=>it.costAtSale=avgOf(stockById(it.stockId,state)));const id=nextId('SAL'),billNo=nextBillNo('sale');saved={id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId};for(const [sid,need]of Object.entries(needs))Object.assign(stockById(sid,state),{qty:stockById(sid,state).qty-need,_hasDownstream:true});state.sales.push(saved);if(d.fromQuoteId)Object.assign(state.quotations.find(q=>q.id===d.fromQuoteId),{status:'converted',convertedToBill:billNo});auditIn(state,'Sale created',billNo);});saleDraft={customer:'',partyId:null,paidInFull:true,amountPaid:0,gstMode:'included',items:[],additionalCharges:[],billDiscount:0};syncCatalogItem();openPrintPreview('sale',saved.id);});}
 async function saveSaleCloud(){return saveSale();}
-async function savePurchase(){return guarded('purchase',async()=>{checkPurchase(purchaseDraft.items);validateCommonDraft(purchaseDraft);const d=clone(purchaseDraft);await resolvePurchaseItems(d.items,CLOUD_MODE);const totals=purchaseTotals(d.items,d),groups=groupedIncoming(d.items,totals.landed);delete totals.landed;if(!purchaseDraft.operationId)purchaseDraft.operationId=uid();const operationId=purchaseDraft.operationId;let saved;const full=amount(totals.totalAmount+totals.totalGst+totals.additionalChargesTotal);const fields={date:todayStr(),supplier:d.supplier||'Unknown supplier',supplierBillNo:d.supplierBillNo||'',partyId:d.partyId||null,gstMode:d.gstMode,items:d.items,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):full,rev:0,operationId};
- if(CLOUD_MODE){const ref=fsDB.collection('purchases').doc(operationId),billNo=await nextBillNoCloud('purchase');await fsDB.runTransaction(async tx=>{const exists=await tx.get(ref);if(exists.exists){saved={id:ref.id,...exists.data()};return;}const ids=Object.keys(groups);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),snaps=await Promise.all(refs.map(r=>tx.get(r)));const stocks=ids.map((id,i)=>incomingStock(snaps[i].exists?snaps[i].data():null,groups[id],id));stocks.forEach((s,i)=>tx.set(refs[i],s,{merge:true}));saved={id:ref.id,billNo,...fields,createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.set(ref,saved);});upsert('purchases',saved);}
+async function savePurchase(){return guarded('purchase',async()=>{checkPurchase(purchaseDraft.items);validateCommonDraft(purchaseDraft);const d=clone(purchaseDraft);await resolvePurchaseItems(d.items,CLOUD_MODE);const totals=purchaseTotals(d.items,d),groups=groupedIncoming(d.items,totals.landed);delete totals.landed;if(!purchaseDraft.operationId)purchaseDraft.operationId=uid();const operationId=purchaseDraft.operationId;let saved;const full=amount(totals.totalAmount+totals.totalGst+totals.additionalChargesTotal);const fields={date:todayStr(),supplier:d.supplier||'Unknown supplier',supplierBillNo:d.supplierBillNo||'',actualAmountPaidExplicit:d.actualAmountPaid!==''&&d.actualAmountPaid!=null,partyId:d.partyId||null,gstMode:d.gstMode,items:d.items,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):full,rev:0,operationId};
+ if(CLOUD_MODE){const ref=fsDB.collection('purchases').doc(operationId),billNo=await nextBillNoCloud('purchase');await fsDB.runTransaction(async tx=>{const exists=await tx.get(ref);if(exists.exists){saved={id:ref.id,...exists.data()};return;}const ids=Object.keys(groups);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),snaps=await Promise.all(refs.map(r=>tx.get(r)));const stocks=ids.map((id,i)=>incomingStock(snaps[i].exists?snaps[i].data():null,groups[id],id));stocks.forEach((s,i)=>tx.set(refs[i],{...s,...(!isServerOwner()?{_staffOperationId:operationId,_staffOperationType:'purchases',_staffActor:firebase.auth().currentUser.uid}:{})},{merge:true}));saved={id:ref.id,billNo,...fields,...actorFields(),stockChanges:Object.fromEntries(ids.map(id=>[id,groups[id].qty])),stockValues:Object.fromEntries(ids.map(id=>[id,groups[id].value])),createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.set(ref,saved);});upsert('purchases',saved);}
  else localCommit(state=>{for(const [id,g]of Object.entries(groups)){const s=state.stock.find(s=>s.id===id),next=incomingStock(s,g,id);if(s)Object.assign(s,next);else state.stock.push({id,...next});}saved={id:nextId('PUR'),billNo:nextBillNo('purchase'),...fields};state.purchases.push(saved);auditIn(state,'Purchase created',saved.billNo);});purchaseDraft={supplier:'',partyId:null,paidInFull:true,amountPaid:0,gstMode:'excluded',items:[],additionalCharges:[],actualAmountPaid:'',supplierBillNo:''};syncCatalogItem();openPrintPreview('purchase',saved.id);});}
 async function savePurchaseCloud(){return savePurchase();}
 function upsert(collection,rec){const i=db[collection].findIndex(x=>x.id===rec.id);if(i<0)db[collection].push(clone(rec));else db[collection][i]=clone(rec);}
 function linkedReturns(sale){return (db.saleReturns||[]).filter(r=>r.saleId===sale.id||(!r.saleId&&r.refSaleId===sale.billNo));}
 function returnedMap(sale){if(sale._returnSeeded)return {...sale._returnedByLine};const result={},lines=ensureLines(sale.items);for(const r of linkedReturns(sale)){for(const it of r.items||[]){let left=units(it),matches=lines.filter(l=>it.lineId?l.lineId===it.lineId:l.stockId===it.stockId);for(const line of matches){const room=units(line)-(result[line.lineId]||0),take=Math.min(Math.max(room,0),left);result[line.lineId]=(result[line.lineId]||0)+take;left-=take;}if(left>0)throw Error('Historical returns exceed this bill or cannot be matched. Reconcile this bill before another return.');}}return result;}
 function pickSaleForReturn(id){try{const sale=db.sales.find(s=>s.id===id);if(!sale)return;const returned=returnedMap(sale);saleReturnDraft={sale:clone(sale),items:ensureLines(sale.items).map(line=>{const left=Math.max(0,units(line)-(returned[line.lineId]||0)),p=line.piecesPerBox,net=saleLineNetPerUnit(sale,line);return {...line,soldBoxQty:Math.floor(left/p),soldPieceQty:left%p,originalBoxQty:line.boxQty,originalPieceQty:line.pieceQty,boxQty:Math.floor(left/p),pieceQty:left%p,alreadyReturnedBoxQty:Math.floor((returned[line.lineId]||0)/p),alreadyReturnedPieceQty:(returned[line.lineId]||0)%p,...net};})};render();}catch(e){alert(e.message);}}
-function calculateReturn(sale,requested){const lines=ensureLines(sale.items),returned=returnedMap(sale),items=[];let totalAmount=0,totalGst=0;for(let i=0;i<requested.length;i++){const req=requested[i],line=lines.find(l=>l.lineId===(req.lineId||'line-'+i));if(!line)throw Error('The sale changed; reopen it.');const count=units({...req,piecesPerBox:line.piecesPerBox});if(!count)continue;const sold=units(line),prior=returned[line.lineId]||0;if(count+prior>sold)throw Error('The return exceeds the remaining sold quantity. Reopen this bill.');const net=saleLineNetPerUnit(sale,line);const gross=Number(line.boxQty||0)*net.netBoxTotal+Number(line.pieceQty||0)*net.netPieceTotal;const tax=Number(line.boxQty||0)*net.netBoxGst+Number(line.pieceQty||0)*net.netPieceGst;const refund=amount(gross*(prior+count)/sold)-amount(gross*prior/sold),gst=amount(tax*(prior+count)/sold)-amount(tax*prior/sold);returned[line.lineId]=prior+count;const stock=stockById(line.stockId);if(!stock)throw Error('The returned product is missing from stock. Restore its record first.');items.push({...line,stockId:stock.id,boxQty:Math.floor(count/line.piecesPerBox),pieceQty:count%line.piecesPerBox,lineTotal:amount(refund),lineGst:amount(gst),netBoxTotal:refund/count*line.piecesPerBox,netPieceTotal:refund/count,netBoxGst:gst/count*line.piecesPerBox,netPieceGst:gst/count,costAtSale:line.costAtSale??avgOf(stock)});totalAmount+=refund;totalGst+=gst;}if(!items.length)throw Error('Enter a positive return quantity.');return {items,totalAmount:amount(totalAmount),totalGst:amount(totalGst),returned};}
+function returnStockValues(items){const values={};for(const it of items)values[it.stockId]=(values[it.stockId]||0)+units(it)*numeric(it.costAtSale,'Original sale cost');return values;}
+function returnedStock(s,qty,value){const nextQty=numeric(s.qty,'Stock')+qty;return {qty:nextQty,avgCost:(s.qty*avgOf(s)+value)/nextQty,_hasDownstream:true};}
+function calculateReturn(sale,requested){const lines=ensureLines(sale.items),returned=returnedMap(sale),items=[];let totalAmount=0,totalGst=0;for(let i=0;i<requested.length;i++){const req=requested[i],line=lines.find(l=>l.lineId===(req.lineId||'line-'+i));if(!line)throw Error('The sale changed; reopen it.');const count=units({...req,piecesPerBox:line.piecesPerBox});if(!count)continue;if(line.costAtSale==null)throw Error('This older sale has no recorded cost. Reconcile it before returning stock.');const sold=units(line),prior=returned[line.lineId]||0;if(count+prior>sold)throw Error('The return exceeds the remaining sold quantity. Reopen this bill.');const net=saleLineNetPerUnit(sale,line);const gross=Number(line.boxQty||0)*net.netBoxTotal+Number(line.pieceQty||0)*net.netPieceTotal;const tax=Number(line.boxQty||0)*net.netBoxGst+Number(line.pieceQty||0)*net.netPieceGst;const refund=amount(gross*(prior+count)/sold)-amount(gross*prior/sold),gst=amount(tax*(prior+count)/sold)-amount(tax*prior/sold);returned[line.lineId]=prior+count;const stock=stockById(line.stockId);if(!stock)throw Error('The returned product is missing from stock. Restore its record first.');items.push({...line,stockId:stock.id,boxQty:Math.floor(count/line.piecesPerBox),pieceQty:count%line.piecesPerBox,lineTotal:amount(refund),lineGst:amount(gst),netBoxTotal:refund/count*line.piecesPerBox,netPieceTotal:refund/count,netBoxGst:gst/count*line.piecesPerBox,netPieceGst:gst/count,costAtSale:line.costAtSale});totalAmount+=refund;totalGst+=gst;}if(!items.length)throw Error('Enter a positive return quantity.');return {items,totalAmount:amount(totalAmount),totalGst:amount(totalGst),returned};}
 async function saveSaleReturn(){return guarded('saleReturn',async()=>{if(!saleReturnDraft.sale)throw Error('Select a sale.');if(!saleReturnDraft.operationId)saleReturnDraft.operationId=uid();const d=clone(saleReturnDraft),operationId=d.operationId;let saved;
- if(CLOUD_MODE){const saleRef=fsDB.collection('sales').doc(d.sale.id),retRef=fsDB.collection('saleReturns').doc(operationId),billNo=await nextBillNoCloud('sale');await fsDB.runTransaction(async tx=>{const old=await tx.get(retRef);if(old.exists){saved={id:retRef.id,...old.data()};return;}const snap=await tx.get(saleRef);if(!snap.exists)throw Error('Sale no longer exists.');const sale={id:saleRef.id,...snap.data()};if((sale.rev||0)!==(d.sale.rev||0))throw Error('This sale changed; reopen the return.');const calc=calculateReturn(sale,d.items),needs=aggregateSaleNeeds(calc.items),ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),stocks=await Promise.all(refs.map(r=>tx.get(r)));stocks.forEach((s,i)=>{if(!s.exists||s.data().mergedInto)throw Error('Stock changed; reopen the return.');tx.update(refs[i],{qty:numeric(s.data().qty,'Stock')+needs[ids[i]]});});saved={id:retRef.id,billNo,date:todayStr(),saleId:sale.id,refSaleId:sale.billNo,partyId:sale.partyId||null,gstMode:sale.gstMode,items:calc.items,totalAmount:calc.totalAmount,totalGst:calc.totalGst,operationId,createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.update(saleRef,{items:ensureLines(sale.items),_returnedByLine:calc.returned,_returnSeeded:true,_returnToken:operationId,rev:(sale.rev||0)+1});tx.set(retRef,saved);});upsert('saleReturns',saved);}
- else localCommit(state=>{const sale=state.sales.find(s=>s.id===d.sale.id);if(!sale)throw Error('Sale missing.');if((sale.rev||0)!==(d.sale.rev||0))throw Error('Sale changed; reopen the return.');const calc=calculateReturn(sale,d.items);calc.items.forEach(it=>stockById(it.stockId,state).qty+=units(it));Object.assign(sale,{items:ensureLines(sale.items),_returnedByLine:calc.returned,_returnSeeded:true,rev:(sale.rev||0)+1});saved={id:nextId('SRET'),billNo:nextBillNo('sale'),date:todayStr(),saleId:sale.id,refSaleId:sale.billNo,partyId:sale.partyId||null,gstMode:sale.gstMode,items:calc.items,totalAmount:calc.totalAmount,totalGst:calc.totalGst,operationId};state.saleReturns.push(saved);auditIn(state,'Sale return',saved.billNo);});saleReturnDraft={sale:null,items:[]};syncCatalogItem();openPrintPreview('saleReturn',saved.id);});}
+ if(CLOUD_MODE){const saleRef=fsDB.collection('sales').doc(d.sale.id),retRef=fsDB.collection('saleReturns').doc(operationId),billNo=await nextBillNoCloud('sale');await fsDB.runTransaction(async tx=>{const old=await tx.get(retRef);if(old.exists){saved={id:retRef.id,...old.data()};return;}const snap=await tx.get(saleRef);if(!snap.exists)throw Error('Sale no longer exists.');const sale={id:saleRef.id,...snap.data()};if((sale.rev||0)!==(d.sale.rev||0))throw Error('This sale changed; reopen the return.');const calc=calculateReturn(sale,d.items),needs=aggregateSaleNeeds(calc.items),ids=Object.keys(needs);assertTxnSize(ids);const values=returnStockValues(calc.items),refs=ids.map(id=>fsDB.collection('stock').doc(id)),stocks=await Promise.all(refs.map(r=>tx.get(r)));stocks.forEach((s,i)=>{if(!s.exists||s.data().mergedInto)throw Error('Stock changed; reopen the return.');tx.update(refs[i],staffStockUpdate(numeric(s.data().qty,'Stock')+needs[ids[i]],operationId,'saleReturns',returnedStock(s.data(),needs[ids[i]],values[ids[i]])));});saved={id:retRef.id,billNo,date:todayStr(),saleId:sale.id,refSaleId:sale.billNo,partyId:sale.partyId||null,gstMode:sale.gstMode,items:calc.items,totalAmount:calc.totalAmount,totalGst:calc.totalGst,operationId,...actorFields(),stockChanges:stockChanges(needs,1),stockValues:values,returnedByLine:calc.returned,createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.update(saleRef,{...(isServerOwner()?{items:ensureLines(sale.items)}:{}),_returnedByLine:calc.returned,_returnSeeded:true,_returnToken:operationId,rev:(sale.rev||0)+1});tx.set(retRef,saved);});upsert('saleReturns',saved);}
+ else localCommit(state=>{const sale=state.sales.find(s=>s.id===d.sale.id);if(!sale)throw Error('Sale missing.');if((sale.rev||0)!==(d.sale.rev||0))throw Error('Sale changed; reopen the return.');const calc=calculateReturn(sale,d.items);const needs=aggregateSaleNeeds(calc.items),values=returnStockValues(calc.items);for(const [id,n]of Object.entries(needs)){const stock=stockById(id,state);Object.assign(stock,returnedStock(stock,n,values[id]));}Object.assign(sale,{items:ensureLines(sale.items),_returnedByLine:calc.returned,_returnSeeded:true,rev:(sale.rev||0)+1});saved={id:nextId('SRET'),billNo:nextBillNo('sale'),date:todayStr(),saleId:sale.id,refSaleId:sale.billNo,partyId:sale.partyId||null,gstMode:sale.gstMode,items:calc.items,totalAmount:calc.totalAmount,totalGst:calc.totalGst,operationId};state.saleReturns.push(saved);auditIn(state,'Sale return',saved.billNo);});saleReturnDraft={sale:null,items:[]};syncCatalogItem();openPrintPreview('saleReturn',saved.id);});}
 async function saveSaleReturnCloud(){return saveSaleReturn();}
 function partyBalance(partyId){const p=db.parties.find(p=>p.id===partyId);if(!p)return 0;let bal=Number(p.openingBalance)||0;const source=p.type==='supplier'?db.purchases:db.sales;for(const s of source.filter(s=>s.partyId===partyId)){const total=p.type==='supplier'?s.totalAmount+s.totalGst+(s.additionalChargesTotal||0):s.totalAmount;bal+=total-(s.amountPaid??total);}if(p.type==='supplier')for(const r of db.purchaseReturns.filter(r=>r.partyId===partyId))bal-=r.totalAmount+r.totalGst;else for(const r of db.saleReturns){const party=r.partyId||db.sales.find(s=>s.id===r.saleId||s.billNo===r.refSaleId)?.partyId;if(party===partyId)bal-=r.totalAmount;}for(const pay of db.payments.filter(p=>p.partyId===partyId))bal+=pay.direction==='refund'?Number(pay.amount):-Number(pay.amount);return amount(bal);}
 function nextId(prefix){if(!db.seqs)db.seqs={};let n=Number(db.seqs[prefix])||1;const used=new Set(hwCollections.flatMap(k=>(db[k]||[]).map(x=>x.id)));while(used.has(prefix+'-'+String(n).padStart(4,'0')))n++;db.seqs[prefix]=n+1;return prefix+'-'+String(n).padStart(4,'0');}
@@ -3811,8 +3826,14 @@ async function saveOpeningStockCloud(){return saveOpeningStock();}
 function importOpeningStockCsv(file){if(!file)return;const reader=new FileReader();reader.onload=()=>guarded('opening',async()=>{const rows=parseCsv(reader.result);if(rows.length<2)throw Error('The CSV needs a header and item rows.');const items=rows.slice(1).filter(r=>r.some(v=>String(v).trim())).map((r,i)=>{if(r.length<9)throw Error('CSV row '+(i+2)+' is incomplete. Nothing was imported.');return {itemName:r[0].trim(),category:r[1].trim(),subcategory:(r[2]||'').trim(),material:(r[3]||'').trim(),size:(r[4]||'').trim(),batch:(r[5]||'').trim(),piecesPerBox:Number(r[6]),qty:Number(r[7]),cost:Number(r[8]),mrp:Number(r[9]||r[8]),gst:Number(r[10]||0)};});checkPurchase(items,true);if(!confirm('Import all '+items.length+' rows as opening stock?'))return;if(CLOUD_MODE)await applyOpeningStockItemsCloud(items);else localCommit(state=>{const valid=applyOpeningStockItemsLocal(items);state.openingStock.push({id:nextId('OPS'),openingNo:nextBillNo('opening'),date:todayStr(),items:valid,status:'completed',rev:0});auditIn(state,'Opening CSV imported',items.length+' lines');});alert('All '+items.length+' rows imported.');setScreen('stock');});reader.onerror=()=>alert('Could not read the CSV.');reader.readAsText(file);}
 function hasDownstream(id){return db.sales.some(s=>s.items?.some(it=>it.stockId===id))||db.saleReturns.some(s=>s.items?.some(it=>it.stockId===id))||db.purchaseReturns.some(s=>s.items?.some(it=>it.stockId===id));}
 function economicGroups(rec,opening=false){const items=rec.items;const values=opening?items.map(it=>gstBreakdown(Number(it.cost)*Number(it.qty),Number(it.gst)||0,'included').taxable):purchaseTotals(items,rec).landed;return groupedIncoming(items,values);}
-function billReplacement(current,draft,stocks,type){const isPurchase=type==='purchase'||type==='opening';const next={...clone(current),items:clone(draft),rev:(current.rev||0)+1};const updates={};if(isPurchase){checkPurchase(draft,type==='opening');const before=economicGroups(current,type==='opening'),after=economicGroups(next,type==='opening');for(const id of new Set([...Object.keys(before),...Object.keys(after)])){const s=stocks[id];if(!s||s.mergedInto)throw Error('A product was removed or merged. Use an explicit stock correction.');const a=before[id]||{qty:0,value:0},b=after[id]||{qty:0,value:0};if((a.qty!==b.qty||Math.abs(a.value-b.value)>0.001)&&hasDownstream(id))throw Error('This stock has sales or returns. Historical purchase/opening quantities and cost cannot be rewritten; use a documented stock adjustment or return.');const qty=s.qty-a.qty+b.qty,value=s.qty*avgOf(s)-a.value+b.value;if(qty<0||value<-0.01)throw Error('This change would make stock or valuation negative.');updates[id]={qty,avgCost:qty>0?Math.max(0,value)/qty:0};}if(type==='purchase'){const t=purchaseTotals(next.items,next);delete t.landed;Object.assign(next,t);}}
- else{checkSale(draft);if(linkedReturns(current).length||Object.values(current._returnedByLine||{}).some(n=>n>0))throw Error('This sale has returns. Its quantities and prices are locked to preserve the credit history.');const a=aggregateSaleNeeds(current.items),b=aggregateSaleNeeds(draft);for(const id of new Set([...Object.keys(a),...Object.keys(b)])){const s=stocks[id];if(!s||s.mergedInto)throw Error('Stock changed. Reopen this bill.');const qty=s.qty+(a[id]||0)-(b[id]||0);if(qty<0)throw Error('Not enough stock for the combined edited quantities.');updates[id]={qty};}next.items=ensureLines(next.items);Object.assign(next,saleTotals(next.items,next));}
+function billReplacement(current,draft,stocks,type){const isPurchase=type==='purchase'||type==='opening';const next={...clone(current),items:clone(draft),rev:(current.rev||0)+1};const updates={};if(isPurchase){checkPurchase(draft,type==='opening');for(const it of next.items){const old=current.items.find(row=>row.sku===it.sku);if(!old||Number(old.piecesPerBox)!==Number(it.piecesPerBox))throw Error('Product and box size cannot be changed on a saved purchase.');}const before=economicGroups(current,type==='opening'),after=economicGroups(next,type==='opening');for(const id of new Set([...Object.keys(before),...Object.keys(after)])){const s=stocks[id];if(!s||s.mergedInto)throw Error('A product was removed or merged. Use an explicit stock correction.');const a=before[id]||{qty:0,value:0},b=after[id]||{qty:0,value:0};if((a.qty!==b.qty||Math.abs(a.value-b.value)>0.001)&&(s._hasDownstream||hasDownstream(id)||(CLOUD_MODE&&!s._historyTracked)))throw Error('This stock has sales/returns or unverified older cloud history. Historical purchase/opening quantities and cost are locked; use an appropriate documented correction.');const qty=s.qty-a.qty+b.qty,value=s.qty*avgOf(s)-a.value+b.value;if(qty<0||value<-0.01)throw Error('This change would make stock or valuation negative.');updates[id]={qty,avgCost:qty>0?Math.max(0,value)/qty:0};}if(type==='purchase'){const t=purchaseTotals(next.items,next);delete t.landed;Object.assign(next,t);}}
+ else{checkSale(draft);if(linkedReturns(current).length||Object.values(current._returnedByLine||{}).some(n=>n>0))throw Error('This sale has returns. Its quantities and prices are locked to preserve the credit history.');
+ const original=ensureLines(current.items);next.items=ensureLines(next.items);
+ for(const line of next.items){const old=original.find(it=>it.lineId===line.lineId);const stock=stocks[line.stockId];if(!stock||stock.mergedInto)throw Error('Stock changed. Reopen this bill.');if(old&&(old.stockId!==line.stockId||Number(old.piecesPerBox)!==Number(line.piecesPerBox)))throw Error('Product and box size cannot be changed on a saved sale.');if(old&&old.costAtSale==null)throw Error('This older sale has no recorded cost. Reconcile it before editing.');const n=units(line),prior=old?units(old):0;line.costAtSale=old?(Math.min(n,prior)*old.costAtSale+Math.max(0,n-prior)*avgOf(stock))/n:avgOf(stock);}
+ const a=aggregateSaleNeeds(original),b=aggregateSaleNeeds(next.items),oldValues=returnStockValues(original),newValues=returnStockValues(next.items);
+ for(const id of new Set([...Object.keys(a),...Object.keys(b)])){const stock=stocks[id];if(!stock||stock.mergedInto)throw Error('Stock changed. Reopen this bill.');const qty=stock.qty+(a[id]||0)-(b[id]||0),value=stock.qty*avgOf(stock)+(oldValues[id]||0)-(newValues[id]||0);if(qty<0||value < -0.01 || (qty===0&&Math.abs(value)>0.01))throw Error('This edit conflicts with later stock valuation. Use a return or documented correction.');updates[id]={qty,avgCost:qty>0?Math.max(0,value)/qty:avgOf(stock),_hasDownstream:true};}
+ Object.assign(next,saleTotals(next.items,next));}
+
  // Payments represent actual cash movements; editing a bill never fabricates a new payment.
  return {record:next,updates};}
 async function saveBillDetailEdits(){return guarded('billEdit',async()=>{if(!isOwner())throw Error('Only owners may edit bills.');const ctx=clone(billDetailCtx),col=ctx.type==='purchase'?'purchases':'sales';if(ctx.type==='purchase')checkPurchase(ctx.draftItems);else checkSale(ctx.draftItems);let saved;if(CLOUD_MODE){const ref=fsDB.collection(col).doc(ctx.id);await fsDB.runTransaction(async tx=>{const snap=await tx.get(ref);if(!snap.exists)throw Error('Bill is missing.');const current={id:ref.id,...snap.data()};if((current.rev||0)!==(ctx.baseRev||0))throw Error('This bill changed. Reopen it before editing.');const ids=[...new Set([...current.items,...ctx.draftItems].map(it=>ctx.type==='purchase'?it.sku:it.stockId))];assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(safeId(id))),snaps=await Promise.all(refs.map(r=>tx.get(r))),stocks=Object.fromEntries(ids.map((id,i)=>[id,snaps[i].exists?snaps[i].data():null]));const replacement=billReplacement(current,ctx.draftItems,stocks,ctx.type);saved=replacement.record;if(ctx.type==='purchase')saved.supplierBillNo=ctx.draftSupplierBillNo||'';ids.forEach((id,i)=>{if(replacement.updates[id])tx.update(refs[i],replacement.updates[id]);});tx.set(ref,saved);});upsert(col,saved);}
@@ -3821,10 +3842,10 @@ async function saveBillDetailEditsCloud(){return saveBillDetailEdits();}
 function openOpeningStockDetail(id){const rec=db.openingStock.find(o=>o.id===id);if(!rec)return;openingDetailCtx={id,originalItems:clone(rec.items),draftItems:clone(rec.items),baseRev:rec.rev||0};setScreen('openingStockDetail');}
 function updateOpeningDetailItem(idx,field,val){const it=openingDetailCtx.draftItems[idx];if(it)it[field]=['itemName','batch','category','subcategory','material','size'].includes(field)?val:Number(val);}
 async function saveOpeningStockEdits(){return guarded('openingEdit',async()=>{if(!isOwner())throw Error('Only owners may edit opening stock.');const ctx=clone(openingDetailCtx);checkPurchase(ctx.draftItems,true);let saved;if(CLOUD_MODE){const ref=fsDB.collection('openingStock').doc(ctx.id);await fsDB.runTransaction(async tx=>{const snap=await tx.get(ref);if(!snap.exists)throw Error('Entry missing.');const rec={id:ref.id,...snap.data()};if(rec.status==='pending'||(rec.rev||0)!==ctx.baseRev)throw Error('Entry changed or unfinished. Reopen it.');const ids=[...new Set([...rec.items,...ctx.draftItems].map(it=>it.sku))],refs=ids.map(id=>fsDB.collection('stock').doc(safeId(id))),snaps=await Promise.all(refs.map(r=>tx.get(r))),stocks=Object.fromEntries(ids.map((id,i)=>[id,snaps[i].exists?snaps[i].data():null]));const result=billReplacement(rec,ctx.draftItems,stocks,'opening');saved=result.record;ids.forEach((id,i)=>tx.update(refs[i],result.updates[id]));tx.set(ref,saved);});upsert('openingStock',saved);}else localCommit(state=>{const rec=state.openingStock.find(r=>r.id===ctx.id);if(!rec||(rec.rev||0)!==ctx.baseRev)throw Error('Entry changed. Reopen it.');const stocks=Object.fromEntries(state.stock.map(s=>[s.id,s])),result=billReplacement(rec,ctx.draftItems,stocks,'opening');for(const [id,v]of Object.entries(result.updates))Object.assign(stocks[id],v);saved=result.record;state.openingStock[state.openingStock.indexOf(rec)]=saved;auditIn(state,'Opening stock edited',rec.openingNo||rec.id);});syncCatalogItem();alert('Opening stock and valuation saved together.');setScreen('fullLedger');});}
-async function mergeDuplicates(idsCsv){return guarded('merge',async()=>{if(!isOwner())throw Error('Only owners may merge products.');const ids=[...new Set(idsCsv.split(','))];if(ids.length<2)return;if(!confirm('Merge these products, preserving their combined quantity and cost?'))return;const combine=items=>{if(items.some(s=>!s||s.mergedInto))throw Error('A product has already been merged. Reload.');if(items.some(s=>s.piecesPerBox!==items[0].piecesPerBox))throw Error('Cannot merge different box sizes.');const primary=items.reduce((a,b)=>a.qty>=b.qty?a:b),qty=items.reduce((n,s)=>n+s.qty,0),value=items.reduce((n,s)=>n+s.qty*avgOf(s),0);return {primary,qty,avgCost:qty?value/qty:avgOf(primary)};};if(CLOUD_MODE){await fsDB.runTransaction(async tx=>{const refs=ids.map(id=>fsDB.collection('stock').doc(safeId(id))),snaps=await Promise.all(refs.map(r=>tx.get(r))),items=snaps.map((s,i)=>s.exists?{id:ids[i],...s.data()}:null),g=combine(items);items.forEach((s,i)=>tx.update(refs[i],s.id===g.primary.id?{qty:g.qty,avgCost:g.avgCost}:{qty:0,mergedInto:g.primary.id,discontinued:true}));});}else localCommit(state=>{const items=ids.map(id=>state.stock.find(s=>s.id===id)),g=combine(items);items.forEach(s=>Object.assign(s,s.id===g.primary.id?{qty:g.qty,avgCost:g.avgCost}:{qty:0,mergedInto:g.primary.id,discontinued:true}));auditIn(state,'Products merged',ids.join(', '));});syncCatalogItem();alert('Products merged.');render();});}
-async function savePurchaseReturn(){return guarded('purchaseReturn',async()=>{const d=clone(purchaseReturnDraft);for(const it of d.items){numeric(it.qty,'Return quantity');numeric(it.rate,'Return rate');numeric(it.gst||0,'GST',0,100);units({...it,freeQty:0},'purchase');}const items=d.items.filter(it=>Number(it.qty)>0);if(!items.length)throw Error('Enter a positive return quantity.');if(d.partyId&&!db.parties.some(p=>p.id===d.partyId&&p.type==='supplier'))throw Error('Select an existing supplier.');items.forEach(it=>{const s=stockById(it.stockId);if(!s)throw Error('Product missing.');it.stockId=s.id;});if(!purchaseReturnDraft.operationId)purchaseReturnDraft.operationId=uid();const operationId=purchaseReturnDraft.operationId,needs=Object.create(null);let totalAmount=0,totalGst=0;items.forEach(it=>{needs[it.stockId]=(needs[it.stockId]||0)+units({...it,freeQty:0},'purchase');const br=gstBreakdown(Number(it.qty)*Number(it.rate),Number(it.gst||0),d.gstMode);totalAmount+=br.taxable;totalGst+=br.gst;});let saved;const fields={date:todayStr(),partyId:d.partyId||null,items,gstMode:d.gstMode,totalAmount:amount(totalAmount),totalGst:amount(totalGst),operationId};if(CLOUD_MODE){const ref=fsDB.collection('purchaseReturns').doc(operationId),billNo=await nextBillNoCloud('purchase');await fsDB.runTransaction(async tx=>{const done=await tx.get(ref);if(done.exists){saved={id:ref.id,...done.data()};return;}const ids=Object.keys(needs),refs=ids.map(id=>fsDB.collection('stock').doc(id)),snaps=await Promise.all(refs.map(r=>tx.get(r)));snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Return exceeds current stock.');});snaps.forEach((s,i)=>tx.update(refs[i],{qty:s.data().qty-needs[ids[i]]}));saved={id:ref.id,billNo,...fields,createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.set(ref,saved);});upsert('purchaseReturns',saved);}else localCommit(state=>{for(const [id,n]of Object.entries(needs)){const s=stockById(id,state);if(!s||s.qty<n)throw Error('Return exceeds current stock.');}for(const [id,n]of Object.entries(needs))stockById(id,state).qty-=n;saved={id:nextId('PRET'),billNo:nextBillNo('purchase'),...fields};state.purchaseReturns.push(saved);auditIn(state,'Purchase return',saved.billNo);});purchaseReturnDraft={gstMode:'excluded',partyId:null,items:[]};syncCatalogItem();openPrintPreview('purchaseReturn',saved.id);});}
+async function mergeDuplicates(idsCsv){return guarded('merge',async()=>{if(!isOwner())throw Error('Only owners may merge products.');const ids=[...new Set(idsCsv.split(','))];if(ids.length<2)return;if(!confirm('Merge these products, preserving their combined quantity and cost?'))return;const combine=items=>{if(items.some(s=>!s||s.mergedInto))throw Error('A product has already been merged. Reload.');if(items.some(s=>s.piecesPerBox!==items[0].piecesPerBox))throw Error('Cannot merge different box sizes.');const primary=items.reduce((a,b)=>a.qty>=b.qty?a:b),qty=items.reduce((n,s)=>n+s.qty,0),value=items.reduce((n,s)=>n+s.qty*avgOf(s),0);return {primary,qty,avgCost:qty?value/qty:avgOf(primary)};};if(CLOUD_MODE){await fsDB.runTransaction(async tx=>{const refs=ids.map(id=>fsDB.collection('stock').doc(safeId(id))),snaps=await Promise.all(refs.map(r=>tx.get(r))),items=snaps.map((s,i)=>s.exists?{id:ids[i],...s.data()}:null),g=combine(items);items.forEach((s,i)=>tx.update(refs[i],s.id===g.primary.id?{qty:g.qty,avgCost:g.avgCost,_hasDownstream:true}:{qty:0,mergedInto:g.primary.id,discontinued:true}));});}else localCommit(state=>{const items=ids.map(id=>state.stock.find(s=>s.id===id)),g=combine(items);items.forEach(s=>Object.assign(s,s.id===g.primary.id?{qty:g.qty,avgCost:g.avgCost,_hasDownstream:true}:{qty:0,mergedInto:g.primary.id,discontinued:true}));auditIn(state,'Products merged',ids.join(', '));});syncCatalogItem();alert('Products merged.');render();});}
+async function savePurchaseReturn(){return guarded('purchaseReturn',async()=>{const d=clone(purchaseReturnDraft);for(const it of d.items){numeric(it.qty,'Return quantity');numeric(it.rate,'Return rate');numeric(it.gst||0,'GST',0,100);units({...it,freeQty:0},'purchase');}const items=d.items.filter(it=>Number(it.qty)>0);if(!items.length)throw Error('Enter a positive return quantity.');if(d.partyId&&!db.parties.some(p=>p.id===d.partyId&&p.type==='supplier'))throw Error('Select an existing supplier.');items.forEach(it=>{const s=stockById(it.stockId);if(!s)throw Error('Product missing.');it.stockId=s.id;});if(!purchaseReturnDraft.operationId)purchaseReturnDraft.operationId=uid();const operationId=purchaseReturnDraft.operationId,needs=Object.create(null);let totalAmount=0,totalGst=0;items.forEach(it=>{needs[it.stockId]=(needs[it.stockId]||0)+units({...it,freeQty:0},'purchase');const br=gstBreakdown(Number(it.qty)*Number(it.rate),Number(it.gst||0),d.gstMode);totalAmount+=br.taxable;totalGst+=br.gst;});let saved;const fields={date:todayStr(),partyId:d.partyId||null,items,gstMode:d.gstMode,totalAmount:amount(totalAmount),totalGst:amount(totalGst),operationId};if(CLOUD_MODE){const ref=fsDB.collection('purchaseReturns').doc(operationId),billNo=await nextBillNoCloud('purchase');await fsDB.runTransaction(async tx=>{const done=await tx.get(ref);if(done.exists){saved={id:ref.id,...done.data()};return;}const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),snaps=await Promise.all(refs.map(r=>tx.get(r)));snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Return exceeds current stock.');});const inventoryCost=ids.reduce((sum,id,i)=>sum+needs[id]*avgOf(snaps[i].data()),0);snaps.forEach((s,i)=>tx.update(refs[i],staffStockUpdate(s.data().qty-needs[ids[i]],operationId,'purchaseReturns')));saved={id:ref.id,billNo,...fields,inventoryCost,...actorFields(),stockChanges:stockChanges(needs,-1),createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.set(ref,saved);});upsert('purchaseReturns',saved);}else localCommit(state=>{for(const [id,n]of Object.entries(needs)){const s=stockById(id,state);if(!s||s.qty<n)throw Error('Return exceeds current stock.');}const inventoryCost=Object.entries(needs).reduce((sum,[id,n])=>sum+n*avgOf(stockById(id,state)),0);for(const [id,n]of Object.entries(needs))Object.assign(stockById(id,state),{qty:stockById(id,state).qty-n,_hasDownstream:true});saved={id:nextId('PRET'),billNo:nextBillNo('purchase'),...fields,inventoryCost};state.purchaseReturns.push(saved);auditIn(state,'Purchase return',saved.billNo);});purchaseReturnDraft={gstMode:'excluded',partyId:null,items:[]};syncCatalogItem();openPrintPreview('purchaseReturn',saved.id);});}
 async function savePurchaseReturnCloud(){return savePurchaseReturn();}
-async function saveStockAdjustment(stockId){return guarded('stockAdjust',async()=>{if(!isOwner())throw Error('Only owners may correct stock.');const original=stockById(stockId);if(!original)throw Error('Product missing.');const qty=units({piecesPerBox:original.piecesPerBox,boxQty:document.getElementById('adjustBoxes').value,pieceQty:document.getElementById('adjustPieces').value}),reason=document.getElementById('adjustReason').value,note=document.getElementById('adjustNote').value.trim(),old=original.qty;if(qty===old)return;if(!confirm('Correct '+original.itemName+' from '+old+' to '+qty+' pieces?'))return;if(CLOUD_MODE){const ref=fsDB.collection('stock').doc(original.id),audit=fsDB.collection('auditLog').doc(uid());await fsDB.runTransaction(async tx=>{const snap=await tx.get(ref);if(!snap.exists||snap.data().qty!==old||snap.data().mergedInto)throw Error('Stock changed on another device. Reload before correcting it.');tx.update(ref,{qty});tx.set(audit,{action:'Stock corrected',detail:original.id+' '+old+' → '+qty+' '+reason+' '+note,role:serverRole,at:new Date().toISOString(),createdAt:firebase.firestore.FieldValue.serverTimestamp()});});}else localCommit(state=>{stockById(original.id,state).qty=qty;auditIn(state,'Stock corrected',original.id+' '+old+' → '+qty+' '+reason+' '+note);});syncCatalogItem();alert('Stock correction saved.');render();});}
+async function saveStockAdjustment(stockId){return guarded('stockAdjust',async()=>{if(!isOwner())throw Error('Only owners may correct stock.');const original=stockById(stockId);if(!original)throw Error('Product missing.');const qty=units({piecesPerBox:original.piecesPerBox,boxQty:document.getElementById('adjustBoxes').value,pieceQty:document.getElementById('adjustPieces').value}),reason=document.getElementById('adjustReason').value,note=document.getElementById('adjustNote').value.trim(),old=original.qty;if(qty===old)return;if(!confirm('Correct '+original.itemName+' from '+old+' to '+qty+' pieces?'))return;if(CLOUD_MODE){const ref=fsDB.collection('stock').doc(original.id),audit=fsDB.collection('auditLog').doc(uid());await fsDB.runTransaction(async tx=>{const snap=await tx.get(ref);if(!snap.exists||snap.data().qty!==old||snap.data().mergedInto)throw Error('Stock changed on another device. Reload before correcting it.');tx.update(ref,{qty,_hasDownstream:true});tx.set(audit,{action:'Stock corrected',detail:original.id+' '+old+' → '+qty+' '+reason+' '+note,role:serverRole,at:new Date().toISOString(),createdAt:firebase.firestore.FieldValue.serverTimestamp()});});}else localCommit(state=>{Object.assign(stockById(original.id,state),{qty,_hasDownstream:true});auditIn(state,'Stock corrected',original.id+' '+old+' → '+qty+' '+reason+' '+note);});syncCatalogItem();alert('Stock correction saved.');render();});}
 async function saveStaffEntry(staffId){return guarded('staffEntry',async()=>{if(!isOwner())throw Error('Only owners may record salary entries.');const type=document.getElementById('staffEntryType').value,amountValue=numeric(document.getElementById('staffEntryAmount').value,'Amount',0.01),date=document.getElementById('staffEntryDate').value,note=document.getElementById('staffEntryNote').value.trim();if(!['due','payment','advance'].includes(type)||!/^\d{4}-\d{2}-\d{2}$/.test(date))throw Error('Select a valid date and entry type.');if(!db.staff.some(s=>s.id===staffId))throw Error('Staff member missing.');const id=uid(),entry={id,staffId,type,amount:amount(amountValue),date,note},expense={id:'salary-'+id,date,category:'Staff Salary',amount:amount(amountValue),billRef:id,note:'Salary paid to '+db.staff.find(s=>s.id===staffId).name};if(CLOUD_MODE){const batch=fsDB.batch();batch.set(fsDB.collection('staffLedger').doc(id),{...entry,createdAt:firebase.firestore.FieldValue.serverTimestamp()});if(type==='payment')batch.set(fsDB.collection('expenses').doc(expense.id),{...expense,createdAt:firebase.firestore.FieldValue.serverTimestamp()});await batch.commit();}else localCommit(state=>{state.staffLedger.push(entry);if(type==='payment')state.expenses.push(expense);auditIn(state,'Staff entry',type+' '+amountValue);});document.getElementById('staffEntryAmount').value='';render();});}
 async function recordPayment(partyId){return guarded('payment',async()=>{if(!isOwner())throw Error('Only owners may record payments.');const balance=partyBalance(partyId),value=amount(numeric(document.getElementById('paymentAmount').value,'Payment',0.01));if(!db.parties.some(p=>p.id===partyId))throw Error('Party missing.');const direction=balance<0?'refund':'payment';if(direction==='refund'&&!confirm('Record '+fmt(value)+' as a refund settling this credit balance?'))return;const record={id:uid(),partyId,date:todayStr(),amount:value,note:document.getElementById('paymentNote').value.trim(),direction};if(CLOUD_MODE){await fsDB.collection('payments').doc(record.id).set({...record,createdAt:firebase.firestore.FieldValue.serverTimestamp()});upsert('payments',record);}else localCommit(state=>{state.payments.push(record);auditIn(state,'Payment recorded',direction+' '+value);});document.getElementById('paymentAmount').value='';render();});}
 function validateDatabase(input){if(!input||typeof input!=='object'||Array.isArray(input))throw Error('Invalid backup object.');const data=clone(input);if(!['stock','sales','purchases'].every(k=>Array.isArray(data[k])))throw Error('Backup is missing stock, sales or purchases.');for(const c of hwCollections){if(data[c]==null)data[c]=[];if(!Array.isArray(data[c]))throw Error('Invalid '+c+' records.');const ids=new Set();for(const r of data[c]){if(!r||typeof r!=='object'||Array.isArray(r))throw Error('Invalid record in '+c);safeId(r.id);if(ids.has(r.id))throw Error('Duplicate ID in '+c);ids.add(r.id);}}
@@ -3836,24 +3857,35 @@ function validateDatabase(input){if(!input||typeof input!=='object'||Array.isArr
  const checkTree=v=>{if(v&&typeof v==='object')for(const k of Object.keys(v)){if(['__proto__','constructor','prototype'].includes(k))throw Error('Unsafe field name in backup.');checkTree(v[k]);}else if(typeof v==='number'&&!Number.isFinite(v))throw Error('Invalid numeric value.');};checkTree(data);data.categories=data.categories||defaultCategories();if(typeof data.categories!=='object'||Array.isArray(data.categories))throw Error('Invalid categories.');for(const c of Object.values(data.categories))if(!c||!Array.isArray(c.subs)||!Array.isArray(c.materials))throw Error('Invalid category structure.');data.shopInfo=data.shopInfo||{name:'Hammad World',gstin:'',address:'',phone:''};data.seqs=data.seqs&&typeof data.seqs==='object'&&!Array.isArray(data.seqs)?data.seqs:{};data.schemaVersion=3;return data;}
 function importBackup(file){if(!file)return;const reader=new FileReader();reader.onload=()=>guarded('restore',async()=>{if(CLOUD_MODE)throw Error('Cloud restore is not a local import. Disconnect cloud and restore into a separate local test copy first.');if(!isOwner())throw Error('Only owners may restore backups.');let parsed;try{parsed=validateDatabase(JSON.parse(reader.result));}catch(e){throw Error('Backup rejected. Nothing changed. '+e.message);}if(!confirm('Replace this device’s local records with '+parsed.stock.length+' products and '+parsed.sales.length+' sales? A recovery copy will be kept.'))return;const before=clone(db),raw=localStorage.getItem(DB_KEY);localStorage.setItem(DB_KEY+'_recovery',raw||JSON.stringify(before));try{saveDB(parsed);db=parsed;render();alert('Backup restored. A copy of the previous database is available under Recovery.');}catch(e){db=before;throw e;}});reader.onerror=()=>alert('Could not read backup file.');reader.readAsText(file);}
 function downloadJSON(data,name){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-function exportRecovery(){const raw=localStorage.getItem(DB_KEY+'_recovery');if(!raw){alert('No recovery copy has been created.');return;}downloadJSON(JSON.parse(raw),'hammad-world-recovery.json');}
+function exportRecovery(){
+  if(!requireOwner())return;const raw=localStorage.getItem(DB_KEY+'_recovery');if(!raw){alert('No recovery copy has been created.');return;}downloadJSON(JSON.parse(raw),'hammad-world-recovery.json');}
 async function fetchAllCloudDocs(name){const output=[];let last=null;for(;;){let q=fsDB.collection(name).orderBy(firebase.firestore.FieldPath.documentId()).limit(500);if(last)q=q.startAfter(last);const snap=await q.get({source:'server'});for(const d of snap.docs)output.push({id:d.id,...d.data()});if(snap.docs.length<500)break;last=snap.docs[snap.docs.length-1];}return output;}
 async function exportBackup(){return guarded('backup',async()=>{let data;if(CLOUD_MODE){const records=await Promise.all(hwCollections.map(c=>fetchAllCloudDocs(c))),settings=await fsDB.collection('settings').doc('shopInfo').get({source:'server'}),cats=await fsDB.collection('categories').doc('main').get({source:'server'});data=Object.fromEntries(hwCollections.map((c,i)=>[c,records[i]]));data.shopInfo=settings.exists?settings.data():db.shopInfo;data.categories=cats.exists?cats.data().data:db.categories;data.seqs={};data.exportInfo={at:new Date().toISOString(),project:getStoredConfig()?.projectId,fullHistory:true,consistency:'Collections paginated from server; pause writes during export for a reconciliation snapshot.'};}else data=clone(db);data.schemaVersion=3;downloadJSON(data,'hammad-world-backup-'+todayStr()+'.json');});}
-function attachCloudListeners(){detachCloudListeners();hwCloudReady=false;hwCloudError='';hwPendingOpenings=[];if(!serverRole){db={...loadDB(),...Object.fromEntries(hwCollections.map(c=>[c,[]]))};hwCloudError='Your account has no role assigned yet. Ask the owner to add you under Users & roles.';safeRender();return;}/* Staff sync only what their role can actually read on the server. Listing a
-   collection the rules deny would make the whole load fail with a permission
-   error, so this list must stay in step with firestore.rules. */
-const STAFF_COLLECTIONS=['stock','sales','saleReturns','parties','payments','quotations'];
-const syncCollections = isServerOwner() ? hwCollections : STAFF_COLLECTIONS;
-const required=new Set([...syncCollections,'categories','shopInfo']);for(const c of hwCollections)db[c]=[];const receive=(key,fn)=>snap=>{fn(snap);if(!snap.metadata||!snap.metadata.fromCache)required.delete(key);const becameReady=!hwCloudReady&&required.size===0;hwCloudReady=required.size===0;if(becameReady&&localStorage.getItem('hw_catalog_pending')==='1')syncCatalogItem();safeRender();};const error=key=>err=>{hwCloudError='Could not load '+key+': '+err.message+'. Reports and writes are blocked until the complete database is available.';hwCloudReady=false;safeRender();};for(const c of syncCollections){cloudUnsubscribers.push(fsDB.collection(c).onSnapshot({includeMetadataChanges:true},receive(c,snap=>{const records=snap.docs.map(d=>({id:d.id,...d.data()}));if(c==='openingStock')hwPendingOpenings=records.filter(r=>r.status==='pending');db[c]=records.filter(r=>c!=='openingStock'||r.status!=='pending');if(['sales','purchases','saleReturns','purchaseReturns'].includes(c))db[c].sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))||String(b.billNo||'').localeCompare(String(a.billNo||'')));}),error(c)));}cloudUnsubscribers.push(fsDB.collection('categories').doc('main').onSnapshot({includeMetadataChanges:true},receive('categories',s=>{db.categories=s.exists?(s.data().data||defaultCategories()):defaultCategories();}),error('categories')));cloudUnsubscribers.push(fsDB.collection('settings').doc('shopInfo').onSnapshot({includeMetadataChanges:true},receive('shopInfo',s=>{db.shopInfo=s.exists?s.data():{name:'Hammad World'};}),error('shopInfo')));}
+function attachCloudListeners(){
+ detachCloudListeners();const epoch=++hwListenerEpoch;hwCloudReady=false;hwCloudError='';hwPendingOpenings=[];
+ for(const c of hwCollections)db[c]=[];
+ db.categories=defaultCategories();db.shopInfo={name:'Hammad World'};
+ if(!isApprovedUser()){hwCloudError='Your account has no approved role. Ask the owner to assign staff or owner access.';safeRender();return;}
+ const allowed=isServerOwner()?hwCollections:hwStaffCollections;
+ const required=new Set([...allowed,'categories','shopInfo']);const failed=new Set();
+ const receive=(key,fn)=>snap=>{if(epoch!==hwListenerEpoch||snap.metadata?.hasPendingWrites)return;fn(snap);if(!snap.metadata||!snap.metadata.fromCache){required.delete(key);failed.delete(key);}const wasReady=hwCloudReady;hwCloudError=failed.size?'Could not load '+[...failed].join(', ')+'. Reconnect or check the deployed permissions.':'';hwCloudReady=required.size===0&&failed.size===0;if(!wasReady&&hwCloudReady&&localStorage.getItem('hw_catalog_pending')==='1')syncCatalogItem();safeRender();};
+ const error=key=>err=>{if(epoch!==hwListenerEpoch)return;failed.add(key);hwCloudError='Could not load '+key+': '+err.message+'. Saving is blocked until the required records load.';hwCloudReady=false;safeRender();};
+ for(const c of allowed)cloudUnsubscribers.push(fsDB.collection(c).onSnapshot({includeMetadataChanges:true},receive(c,snap=>{const records=snap.docs.map(d=>({id:d.id,...d.data()}));if(c==='openingStock')hwPendingOpenings=records.filter(r=>r.status==='pending');db[c]=records.filter(r=>c!=='openingStock'||r.status!=='pending');if(['sales','purchases','saleReturns','purchaseReturns'].includes(c))db[c].sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))||String(b.billNo||'').localeCompare(String(a.billNo||'')));}),error(c)));
+ cloudUnsubscribers.push(fsDB.collection('categories').doc('main').onSnapshot({includeMetadataChanges:true},receive('categories',d=>{db.categories=d.exists?(d.data().data||defaultCategories()):defaultCategories();}),error('categories')));
+ cloudUnsubscribers.push(fsDB.collection('settings').doc('shopInfo').onSnapshot({includeMetadataChanges:true},receive('shopInfo',d=>{db.shopInfo=d.exists?d.data():{name:'Hammad World'};}),error('shopInfo')));
+ // Changes to the user's server role immediately discard data and reload allowed collections.
+ const expectedRole=serverRole,uid=firebase.auth().currentUser.uid;
+ cloudUnsubscribers.push(fsDB.collection('users').doc(uid).onSnapshot({includeMetadataChanges:true},d=>{if(epoch!==hwListenerEpoch||d.metadata?.fromCache)return;const role=d.exists?d.data().role:null;if(role!==expectedRole){serverRole=['owner','staff'].includes(role)?role:null;currentScreen='dashboard';attachCloudListeners();}},error('account role')));
+}
 function logAudit(action,detail){const entry={action,detail,role:CLOUD_MODE?serverRole:currentRole(),at:new Date().toISOString()};if(CLOUD_MODE&&fsDB){fsDB.collection('auditLog').add({...entry,createdAt:firebase.firestore.FieldValue.serverTimestamp()}).catch(e=>console.error('Audit write failed',e));}else localCommit(state=>state.auditLog.push({id:uid(),...entry}));}
 function inlineValue(value){if(typeof value==='number')return Number.isFinite(value)?String(value):'0';return String(value??'').replace(/[^a-zA-Z0-9_.:, -]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));}
 function safeImageUrl(value){try{const u=new URL(String(value));return u.protocol==='https:'?escapeHtml(u.href):'';}catch{return '';}}
-async function authHeaders(){if(!CLOUD_MODE||!isServerOwner()||!firebase.auth().currentUser)throw Error('Sign in with an owner account to publish or upload.');return {Authorization:'Bearer '+await firebase.auth().currentUser.getIdToken()};}
+async function authHeaders(catalogOnly=false){if(!CLOUD_MODE||!(catalogOnly?isApprovedUser():isServerOwner())||!firebase.auth().currentUser)throw Error('Sign in with an approved account. Photo uploads require owner access.');return {Authorization:'Bearer '+await firebase.auth().currentUser.getIdToken()};}
 async function uploadOneToR2(blob,fileKey){const resp=await fetch(R2_WORKER_URL+'/photo',{method:'POST',headers:{...await authHeaders(),'Content-Type':blob.type,'X-File-Key':fileKey},body:blob});if(!resp.ok)throw Error('Photo upload failed: '+resp.status+' '+(await resp.text()).slice(0,160));return (await resp.json()).url;}
 async function putCatalogFile(){throw Error('Individual catalog files are published only by the authenticated server.');}
 let hwPublishing=false;
 function syncCatalogItem(){if(!CLOUD_MODE)return;localStorage.setItem('hw_catalog_pending','1');clearTimeout(catalogPublishPending);catalogPublishPending=setTimeout(()=>publishCatalogQuietly().catch(()=>{}),250);}
-async function publishCatalogQuietly(){if(hwPublishing||!CLOUD_MODE||!isServerOwner()||!hwCloudReady||hasPendingOpening())return;hwPublishing=true;localStorage.removeItem('hw_catalog_pending');try{const response=await fetch(R2_WORKER_URL+'/catalog/publish',{method:'POST',headers:await authHeaders()});if(!response.ok)throw Error((await response.text()).slice(0,200));const result=await response.json();localStorage.setItem('hw_catalog_status','Published '+new Date().toLocaleString());return result;}catch(e){localStorage.setItem('hw_catalog_pending','1');localStorage.setItem('hw_catalog_status','Publish pending: '+e.message);console.error(e);throw e;}finally{hwPublishing=false;if(localStorage.getItem('hw_catalog_pending')==='1')catalogPublishPending=setTimeout(()=>{publishCatalogQuietly().catch(()=>{});},30000);}}
+async function publishCatalogQuietly(){if(hwPublishing||!CLOUD_MODE||!isApprovedUser()||!hwCloudReady||hasPendingOpening())return;hwPublishing=true;localStorage.removeItem('hw_catalog_pending');try{const response=await fetch(R2_WORKER_URL+'/catalog/publish',{method:'POST',headers:await authHeaders(true)});if(!response.ok)throw Error((await response.text()).slice(0,200));const result=await response.json();localStorage.setItem('hw_catalog_status','Published '+new Date().toLocaleString());return result;}catch(e){localStorage.setItem('hw_catalog_pending','1');localStorage.setItem('hw_catalog_status','Publish pending: '+e.message);console.error(e);throw e;}finally{hwPublishing=false;if(localStorage.getItem('hw_catalog_pending')==='1')catalogPublishPending=setTimeout(()=>{publishCatalogQuietly().catch(()=>{});},30000);}}
 async function syncAllToCatalog(){return guarded('publish',async()=>{await publishCatalogQuietly();alert('The catalog was rebuilt from current cloud stock and published.');});}
 function safeRender(){try{const active=document.activeElement;if(active&&['INPUT','TEXTAREA','SELECT'].includes(active.tagName)&&document.getElementById('main')?.contains?.(active)){return;}render();}catch(e){console.error(e);const main=document.getElementById('main');if(main)main.textContent='Could not display these records: '+e.message+'. Export a backup before making further changes.';}}
 async function saveExpense(){return guarded('expense',async()=>{if(!isOwner())throw Error('Only owners may record expenses.');const date=document.getElementById('expDate').value;if(!/^\d{4}-\d{2}-\d{2}$/.test(date))throw Error('Enter a valid date.');const category=document.getElementById('expCategory').value;if(!EXPENSE_CATEGORIES.includes(category))throw Error('Select an expense category.');const record={id:editingExpenseId||uid(),date,category,amount:amount(numeric(document.getElementById('expAmount').value,'Expense amount',0.01)),billRef:document.getElementById('expBillRef').value.trim(),note:document.getElementById('expNote').value.trim()};if(CLOUD_MODE){await fsDB.collection('expenses').doc(record.id).set({...record,createdAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});upsert('expenses',record);}else localCommit(state=>{const i=state.expenses.findIndex(e=>e.id===record.id);if(i>=0)state.expenses[i]=record;else state.expenses.push(record);auditIn(state,'Expense saved',category+' '+record.amount);});editingExpenseId=null;render();return true;});}
@@ -3862,11 +3894,16 @@ async function saveExpenseEntry(){if(await saveExpense())setScreen('expenses');}
 
 // Show recoverable tasks without changing financial records during startup.
 const hwOriginalSettings=renderShopSettings;
-renderShopSettings=function(){return hwOriginalSettings()+ '<div class="card"><h3>Reliability & recovery</h3><p>Version '+HW_VERSION+'. No fixed bill-count limit. Cloud reports use complete history. Local records use this browser’s storage.</p><p>Cloud management is owner-only to protect purchase costs.</p><button class="btn btn-ghost" onclick="exportRecovery()">Download previous local database</button><button class="btn btn-ghost" onclick="resumeOpeningImport()">Resume unfinished cloud opening import</button><p>'+escapeHtml(localStorage.getItem('hw_catalog_status')||'Catalog: publish after configuring the companion worker.')+'</p></div>';};
+renderShopSettings=function(){return hwOriginalSettings()+ '<div class="card"><h3>Reliability & recovery</h3><p>Version '+HW_VERSION+'. No fixed bill-count limit. Cloud reports use complete history. Local records use this browser’s storage.</p><p>Cloud permissions distinguish owner and staff accounts. Staff have transaction and Ledger access; expenses and staff records remain owner-only.</p><button class="btn btn-ghost" onclick="exportRecovery()">Download previous local database</button><button class="btn btn-ghost" onclick="resumeOpeningImport()">Resume unfinished cloud opening import</button><p>'+escapeHtml(localStorage.getItem('hw_catalog_status')||'Catalog: publish after configuring the companion worker.')+'</p></div>';};
 window.renderShopSettings=renderShopSettings;
 window.resumeOpeningImport=resumeOpeningImport;window.exportRecovery=exportRecovery;
 window.addEventListener('storage', e=>{if(e.key===DB_KEY&&!CLOUD_MODE){alert('The local database changed in another tab. Reload before entering more records.');}});
 window.addEventListener('online',()=>{if(localStorage.getItem('hw_catalog_pending'))publishCatalogQuietly().catch(()=>{});});
+
+function readOnlyItems(items){return '<div class="card"><h3>Items</h3>'+items.map(it=>'<div class="list-row"><div><div class="li-main">'+escapeHtml(it.itemName||it.stockId||it.sku)+'</div><div class="li-sub">'+escapeHtml(it.qty!=null?it.qty+' boxes':(it.boxQty||0)+' boxes + '+(it.pieceQty||0)+' pieces')+'</div></div></div>').join('')+'</div>';}
+function renderReadOnlyBill(){const ctx=billDetailCtx,rec=(ctx.type==='purchase'?db.purchases:db.sales).find(r=>r.id===ctx.id);if(!rec)return '<div class="empty">Bill not found.</div>';return '<button class="btn btn-ghost" onclick="setScreen(\'fullLedger\')">← Ledger</button><div class="card"><h3>'+escapeHtml(rec.billNo||rec.id)+'</h3><p>'+escapeHtml(rec.date)+' · '+escapeHtml(rec.supplier||rec.customer||'')+'</p><p>'+escapeHtml(fmt(ctx.type==='purchase'?(rec.totalAmount||0)+(rec.totalGst||0)+(rec.additionalChargesTotal||0):rec.totalAmount))+'</p><p>Read only — saved-bill editing is owner-only.</p></div>'+readOnlyItems(rec.items||[])+'<button class="btn btn-ghost" onclick="openPrintPreview(\''+inlineValue(ctx.type)+'\',\''+inlineValue(ctx.id)+'\')">View / Print bill</button>';}
+function renderReadOnlyOpening(){const rec=db.openingStock.find(r=>r.id===openingDetailCtx.id);return rec?'<button class="btn btn-ghost" onclick="setScreen(\'fullLedger\')">← Ledger</button><div class="card"><h3>'+escapeHtml(rec.openingNo||rec.id)+'</h3><p>Read only — opening-stock changes are owner-only.</p></div>'+readOnlyItems(rec.items||[]):'<div class="empty">Entry not found.</div>';}
+
 const cloudStarting = initCloudIfConfigured();
 updateCloudBadge();
 if(!cloudStarting){
