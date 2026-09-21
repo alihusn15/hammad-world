@@ -2511,46 +2511,93 @@ window.syncAllToCatalog = syncAllToCatalog;
    is a reasonable deterrent for a small shop's catalog, not bank-grade
    security (see the Worker's own code comments for the full explanation). */
 
-function resizeImageFile(file, maxDimension, quality){
-  return new Promise((resolve, reject)=>{
+/* Photo preparation (r9). The chosen file is copied into memory straight away,
+   so Android can't take back access mid-upload. It is decoded once and both
+   sizes are drawn from that single decode. Samsung/iPhone HEIC photos, which
+   Chrome can't open natively, are converted to JPEG by a small library that is
+   loaded only when such a photo is picked. */
+async function readPhotoIntoMemory(file){
+  let bytes;
+  try{ bytes = await file.arrayBuffer(); }
+  catch(e){ throw Error('The phone did not let the app read "'+(file.name||'this photo')+'". If it is a Google Photos / cloud photo, download it to the phone first, or pick it from the Gallery app.'); }
+  if(!bytes || !bytes.byteLength) throw Error('The selected photo is empty. If it is a cloud photo, download it to the phone first.');
+  return {name: file.name||'photo', type: file.type||'', bytes};
+}
+function isHeifContainer(p){
+  if(/hei[cf]/i.test(p.type) || /\.(heic|heif)$/i.test(p.name)) return true;
+  const h = new Uint8Array(p.bytes, 0, Math.min(12, p.bytes.byteLength));
+  if(h.length < 12) return false;
+  const ftyp = String.fromCharCode(h[4],h[5],h[6],h[7]);
+  const brand = String.fromCharCode(h[8],h[9],h[10],h[11]);
+  return ftyp==='ftyp' && !/^avi[fs]$/.test(brand);
+}
+let hwHeicLib = null;
+function loadHeicConverter(){
+  if(window.heic2any) return Promise.resolve(window.heic2any);
+  if(!hwHeicLib) hwHeicLib = new Promise((resolve, reject)=>{
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+    s.onload = ()=> window.heic2any ? resolve(window.heic2any) : reject(Error('HEIC converter did not start.'));
+    s.onerror = ()=>{ hwHeicLib = null; reject(Error('Could not load the HEIC photo converter. Check the internet connection and try again.')); };
+    document.head.appendChild(s);
+  });
+  return hwHeicLib;
+}
+async function decodeImageBlob(blob){
+  if(window.createImageBitmap){
+    try{ return await createImageBitmap(blob, {imageOrientation:'from-image'}); }catch(e){}
+    try{ return await createImageBitmap(blob); }catch(e){}
+  }
+  return await new Promise((resolve, reject)=>{
+    const url = URL.createObjectURL(blob);
     const img = new Image();
-    // A blob URL avoids copying the entire camera photo into a base64 string.
-    // Keep the selected input mounted until this image has finished loading.
-    const photoUrl = URL.createObjectURL(file);
-    const release = ()=>URL.revokeObjectURL(photoUrl);
-    img.onload = ()=>{
-      try{
-        let { width, height } = img;
-        if(!width || !height) throw Error('The selected photo has no readable image data. Try a JPG or PNG photo.');
-        if(width > height && width > maxDimension){ height = Math.round(height*maxDimension/width); width = maxDimension; }
-        else if(height > maxDimension){ width = Math.round(width*maxDimension/height); height = maxDimension; }
-        const canvas = document.createElement('canvas');
-        canvas.width = width; canvas.height = height;
-        const context = canvas.getContext('2d');
-        if(!context) throw Error('This browser cannot prepare the photo. Try a smaller JPG photo.');
-        context.drawImage(img, 0, 0, width, height);
-        release();
-        canvas.toBlob(blob=>{
-          if(blob && blob.type === 'image/webp'){ resolve(blob); return; }
-          canvas.toBlob(jpg=>{ jpg ? resolve(jpg) : reject(new Error('The browser could not prepare this image. Try a smaller JPG photo.')); }, 'image/jpeg', quality);
-        }, 'image/webp', quality);
-      }catch(e){ release(); reject(e); }
-    };
-    img.onerror = ()=>{ release(); reject(Error('The phone could not open this image. Try a JPG or PNG photo saved on the device.')); };
-    img.src = photoUrl;
+    img.onload = ()=>{ URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(Error('decode failed')); };
+    img.src = url;
+  });
+}
+async function decodePhoto(p){
+  const mb = (p.bytes.byteLength/1048576).toFixed(1);
+  try{ return await decodeImageBlob(new Blob([p.bytes], {type: p.type || 'image/jpeg'})); }catch(e){}
+  if(isHeifContainer(p)){
+    const heic2any = await loadHeicConverter();
+    let jpg;
+    try{ jpg = await heic2any({blob: new Blob([p.bytes], {type:'image/heic'}), toType:'image/jpeg', quality:0.95}); }
+    catch(e){ throw Error('This HEIC photo could not be converted ('+mb+' MB). Turn off "High efficiency pictures" in the Camera settings, or pick a JPG photo.'); }
+    if(Array.isArray(jpg)) jpg = jpg[0];
+    try{ return await decodeImageBlob(jpg); }
+    catch(e){ throw Error('The converted HEIC photo could not be opened. Try a JPG photo.'); }
+  }
+  throw Error('The phone could not open this image (type: '+(p.type||'unknown')+', '+mb+' MB). Try a JPG or PNG photo saved on the device.');
+}
+function scaleToBlob(source, maxDimension, quality){
+  return new Promise((resolve, reject)=>{
+    let width = source.naturalWidth || source.width, height = source.naturalHeight || source.height;
+    if(!width || !height){ reject(Error('The selected photo has no readable image data. Try a JPG or PNG photo.')); return; }
+    const scale = Math.min(1, maxDimension / Math.max(width, height));
+    width = Math.round(width*scale); height = Math.round(height*scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if(!ctx){ reject(Error('This browser cannot prepare the photo. Try a smaller JPG photo.')); return; }
+    ctx.drawImage(source, 0, 0, width, height);
+    canvas.toBlob(blob=>{
+      if(blob && blob.type === 'image/webp'){ resolve(blob); return; }
+      canvas.toBlob(jpg=>{ jpg ? resolve(jpg) : reject(Error('The browser could not prepare this image. Try a smaller JPG photo.')); }, 'image/jpeg', quality);
+    }, 'image/webp', quality);
   });
 }
 
-
-async function uploadProductPhoto(sku, file, slotIndex){
-  // Two sizes per photo. The browsing grid shows images around 180px wide, so
-  // serving the 1600px original there would download roughly 10x more than the
-  // screen can use — noticeably slow on mobile once a category has many
-  // products. The full size is still uploaded for tap-to-zoom.
+async function uploadProductPhoto(sku, photo, slotIndex){
+  // Two sizes per photo: 1600px for tap-to-zoom, 500px for the browsing grid.
   const stamp = Date.now();
-  const fullBlob  = await resizeImageFile(file, 1600, 0.9);
-  const thumbBlob = await resizeImageFile(file, 500, 0.82);
-  const ext = fullBlob.type === 'image/webp' ? '.webp' : '.jpg';
+  const picture = await decodePhoto(photo);
+  let fullBlob, thumbBlob;
+  try{
+    fullBlob  = await scaleToBlob(picture, 1600, 0.9);
+    thumbBlob = await scaleToBlob(picture, 500, 0.82);
+  } finally { if(picture.close) picture.close(); }
+  const ext  = fullBlob.type  === 'image/webp' ? '.webp' : '.jpg';
   const tExt = thumbBlob.type === 'image/webp' ? '.webp' : '.jpg';
   const base = 'products/'+sku+'-'+slotIndex+'-'+stamp;
   const fullUrl  = await uploadOneToR2(fullBlob,  base+ext);
@@ -2573,9 +2620,12 @@ async function handlePhotoUpload(sku, fileInput){
   if(statusEl) statusEl.textContent = 'Preparing '+toUpload.length+' photo(s)...';
   if(!s.catalogThumbs) s.catalogThumbs = [];
   try{
-    for(let i=0;i<toUpload.length;i++){
-      if(statusEl) statusEl.textContent = 'Preparing and uploading photo '+(i+1)+' of '+toUpload.length+'...';
-      const r = await uploadProductPhoto(sku, toUpload[i], startSlot+i);
+    // Copy the chosen files into memory before anything else can re-render the screen.
+    const photos = [];
+    for(const f of toUpload) photos.push(await readPhotoIntoMemory(f));
+    for(let i=0;i<photos.length;i++){
+      if(statusEl) statusEl.textContent = 'Preparing and uploading photo '+(i+1)+' of '+photos.length+'...';
+      const r = await uploadProductPhoto(sku, photos[i], startSlot+i);
       s.catalogPhotos.push(r.full);
       s.catalogThumbs.push(r.thumb);
     }
@@ -3763,7 +3813,7 @@ document.addEventListener('keydown', function(e){
 });
 
 /* HAMMAD WORLD reliability revision 2026-09-18. Financial amounts are INR. */
-const HW_VERSION='2026.09.21-r8-photo-upload';
+const HW_VERSION='2026.09.21-r9-photo-heic';
 let hwExpectedLocal=localStorage.getItem(DB_KEY), hwCloudReady=false, hwCloudError='', hwBusy=new Set(), hwPendingOpenings=[];
 const hwCollections=['stock','sales','purchases','saleReturns','purchaseReturns','openingStock','parties','payments','expenses','staff','staffLedger','quotations','auditLog'];
 // Staff subscribe to the shop records needed to verify deliveries and enter bills.
