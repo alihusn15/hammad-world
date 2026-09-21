@@ -2514,26 +2514,30 @@ window.syncAllToCatalog = syncAllToCatalog;
 function resizeImageFile(file, maxDimension, quality){
   return new Promise((resolve, reject)=>{
     const img = new Image();
-    const reader = new FileReader();
-    reader.onload = ()=>{ img.src = reader.result; };
-    reader.onerror = reject;
+    // A blob URL avoids copying the entire camera photo into a base64 string.
+    // Keep the selected input mounted until this image has finished loading.
+    const photoUrl = URL.createObjectURL(file);
+    const release = ()=>URL.revokeObjectURL(photoUrl);
     img.onload = ()=>{
-      let { width, height } = img;
-      if(width > height && width > maxDimension){ height = Math.round(height*maxDimension/width); width = maxDimension; }
-      else if(height > maxDimension){ width = Math.round(width*maxDimension/height); height = maxDimension; }
-      const canvas = document.createElement('canvas');
-      canvas.width = width; canvas.height = height;
-      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-      // WebP is roughly 25-35% smaller than JPEG at the same visual quality and
-      // is supported by every current browser. If this device can't encode it,
-      // fall back to JPEG so an upload never fails over a format.
-      canvas.toBlob(blob=>{
-        if(blob && blob.type === 'image/webp'){ resolve(blob); return; }
-        canvas.toBlob(jpg=>{ jpg ? resolve(jpg) : reject(new Error('Could not process image')); }, 'image/jpeg', quality);
-      }, 'image/webp', quality);
+      try{
+        let { width, height } = img;
+        if(!width || !height) throw Error('The selected photo has no readable image data. Try a JPG or PNG photo.');
+        if(width > height && width > maxDimension){ height = Math.round(height*maxDimension/width); width = maxDimension; }
+        else if(height > maxDimension){ width = Math.round(width*maxDimension/height); height = maxDimension; }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        const context = canvas.getContext('2d');
+        if(!context) throw Error('This browser cannot prepare the photo. Try a smaller JPG photo.');
+        context.drawImage(img, 0, 0, width, height);
+        release();
+        canvas.toBlob(blob=>{
+          if(blob && blob.type === 'image/webp'){ resolve(blob); return; }
+          canvas.toBlob(jpg=>{ jpg ? resolve(jpg) : reject(new Error('The browser could not prepare this image. Try a smaller JPG photo.')); }, 'image/jpeg', quality);
+        }, 'image/webp', quality);
+      }catch(e){ release(); reject(e); }
     };
-    img.onerror = reject;
-    reader.readAsDataURL(file);
+    img.onerror = ()=>{ release(); reject(Error('The phone could not open this image. Try a JPG or PNG photo saved on the device.')); };
+    img.src = photoUrl;
   });
 }
 
@@ -2564,12 +2568,13 @@ async function handlePhotoUpload(sku, fileInput){
   const remaining = Math.max(0, 4 - s.catalogPhotos.length);
   if(!remaining){ alert('This product already has 4 photos — remove one first.'); fileInput.value=''; return; }
   const toUpload = files.slice(0, remaining);
-  render(); // show a busy state immediately rather than a frozen screen
+  fileInput.disabled = true;
   const statusEl = document.getElementById('photoUploadStatus');
-  if(statusEl) statusEl.textContent = 'Uploading '+toUpload.length+' photo(s)...';
+  if(statusEl) statusEl.textContent = 'Preparing '+toUpload.length+' photo(s)...';
   if(!s.catalogThumbs) s.catalogThumbs = [];
   try{
     for(let i=0;i<toUpload.length;i++){
+      if(statusEl) statusEl.textContent = 'Preparing and uploading photo '+(i+1)+' of '+toUpload.length+'...';
       const r = await uploadProductPhoto(sku, toUpload[i], startSlot+i);
       s.catalogPhotos.push(r.full);
       s.catalogThumbs.push(r.thumb);
@@ -2584,9 +2589,11 @@ async function handlePhotoUpload(sku, fileInput){
     alert('✅ Saved — '+toUpload.length+' photo(s) uploaded and stored. No separate "Save" step needed, uploading saves it immediately.');
   }catch(e){
     console.error(e);
-    alert('Photo upload failed: '+e.message+'\n\nCheck: Worker URL is correct, and the Worker\'s bindings/variables are all saved.');
+    const message = e?.message || 'An unexpected error occurred while preparing the photo.';
+    alert('Photo upload failed: '+message);
   }
   fileInput.value = '';
+  fileInput.disabled = false;
   render();
 }
 function removeProductPhoto(sku, idx){
@@ -3756,7 +3763,7 @@ document.addEventListener('keydown', function(e){
 });
 
 /* HAMMAD WORLD reliability revision 2026-09-18. Financial amounts are INR. */
-const HW_VERSION='2026.09.20-r7-shop-staff';
+const HW_VERSION='2026.09.21-r8-photo-upload';
 let hwExpectedLocal=localStorage.getItem(DB_KEY), hwCloudReady=false, hwCloudError='', hwBusy=new Set(), hwPendingOpenings=[];
 const hwCollections=['stock','sales','purchases','saleReturns','purchaseReturns','openingStock','parties','payments','expenses','staff','staffLedger','quotations','auditLog'];
 // Staff subscribe to the shop records needed to verify deliveries and enter bills.
@@ -3918,7 +3925,20 @@ function logAudit(action,detail){const entry={action,detail,role:CLOUD_MODE?serv
 function inlineValue(value){if(typeof value==='number')return Number.isFinite(value)?String(value):'0';return String(value??'').replace(/[^a-zA-Z0-9_.:, -]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));}
 function safeImageUrl(value){try{const u=new URL(String(value));return u.protocol==='https:'?escapeHtml(u.href):'';}catch{return '';}}
 async function authHeaders(catalogOnly=false){if(!CLOUD_MODE||!(catalogOnly?isApprovedUser():isServerOwner())||!firebase.auth().currentUser)throw Error('Sign in with an approved account. Photo uploads require owner access.');return {Authorization:'Bearer '+await firebase.auth().currentUser.getIdToken()};}
-async function uploadOneToR2(blob,fileKey){const resp=await fetch(R2_WORKER_URL+'/photo',{method:'POST',headers:{...await authHeaders(),'Content-Type':blob.type,'X-File-Key':fileKey},body:blob});if(!resp.ok)throw Error('Photo upload failed: '+resp.status+' '+(await resp.text()).slice(0,160));return (await resp.json()).url;}
+async function uploadOneToR2(blob,fileKey){
+ const headers={...await authHeaders(),'Content-Type':blob.type,'X-File-Key':fileKey};
+ let resp;
+ try{resp=await fetch(R2_WORKER_URL+'/photo',{method:'POST',headers,body:blob});}
+ catch(e){throw Error('Could not reach the photo service. Check your connection and the Worker address. '+(e?.message||''));}
+ if(!resp.ok){
+  let reason='';
+  try{const body=await resp.json();reason=body.error||'';}catch{reason='';}
+  throw Error('Photo service error (HTTP '+resp.status+')'+(reason?': '+reason:''));
+ }
+ const result=await resp.json();
+ if(typeof result.url!=='string'||!result.url.startsWith('https://'))throw Error('The photo service did not return an image URL.');
+ return result.url;
+}
 async function putCatalogFile(){throw Error('Individual catalog files are published only by the authenticated server.');}
 let hwPublishing=false;
 const HW_CATALOG_INTERVAL=15*60*1000;
