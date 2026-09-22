@@ -1994,6 +1994,7 @@ function renderBillDetail(){
       ${itemsHtml || `<div class="empty">No items.</div>`}
     </div>
     <button class="btn btn-ghost" onclick="openPrintPreview('${inlineValue(type)}','${inlineValue(id)}')">🖨 View / Print this bill</button>
+    ${!isPurchase ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;"><button class="btn btn-ghost" onclick="shareSaleWhatsApp('${inlineValue(id)}')">WhatsApp</button><button class="btn btn-ghost" onclick="shareSaleBill('${inlineValue(id)}')">Share bill</button></div>` : ''}
     ${isOwner()
       ? `<button class="btn btn-primary" style="margin-top:8px;" onclick="saveBillDetailEdits()">Save changes</button>`
       : `<div class="step">Viewing only — editing a saved bill is restricted to owner accounts.</div>`}
@@ -2129,6 +2130,23 @@ let fbApp=null, fsDB=null;
 
 function getStoredConfig(){ try{ return JSON.parse(localStorage.getItem(FB_CONFIG_KEY)); }catch(e){ return null; } }
 
+function rulesWithStaffQuoteConversion(rules){
+  const start=rules.indexOf('  match /quotations/{id} {');
+  const end=rules.indexOf('  match /{collection}/{id} {',start);
+  if(start<0||end<0)return rules;
+  const block=rules.slice(start,end);
+  const updateRule=`   allow update: if owner() || (staff()
+    && resource.data.get('status','open') != 'converted'
+    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','convertedToBill','convertedSaleId'])
+    && request.resource.data.status == 'converted'
+    && request.resource.data.convertedSaleId is string
+    && getAfter(/databases/$(database)/documents/sales/$(request.resource.data.convertedSaleId)).data.createdBy == request.auth.uid
+    && getAfter(/databases/$(database)/documents/sales/$(request.resource.data.convertedSaleId)).data.sourceQuoteId == id
+    && getAfter(/databases/$(database)/documents/sales/$(request.resource.data.convertedSaleId)).data.billNo == request.resource.data.convertedToBill);`;
+  const updated=block.replace('   allow update: if owner();',updateRule);
+  return rules.slice(0,start)+updated+rules.slice(end);
+}
+
 function openCloudModal(){
   if(!requireOwner())return;
   document.getElementById('genericModalTitle').textContent = 'Connect cloud sync';
@@ -2152,7 +2170,7 @@ function openCloudModal(){
     <button class="btn btn-primary" onclick="connectCloud()">Connect</button>
     ${existing ? `<button class="btn btn-danger" style="margin-top:8px;" onclick="disconnectCloud()">Disconnect & go back to local only</button>` : ''}
     <div class="step" style="margin-top:10px;"><b>Firestore rules — paste ALL of this</b> into Firestore → Rules → Publish:<br>
-    <textarea readonly style="width:100%;min-height:220px;padding:10px;border-radius:9px;border:1.5px solid var(--line);font-family:monospace;font-size:10px;">${escapeHtml(rules)}</textarea></div>
+    <textarea readonly style="width:100%;min-height:220px;padding:10px;border-radius:9px;border:1.5px solid var(--line);font-family:monospace;font-size:10px;">${escapeHtml(rulesWithStaffQuoteConversion(rules))}</textarea></div>
     <div class="step"><b>Important:</b> without step 5 (setting your own role to "owner"), your account will have no database access until a valid owner or staff role is assigned.</div>
   `;
   document.getElementById('genericModal').style.display='flex';
@@ -3398,7 +3416,7 @@ function saveQuotation(){
   }
 }
 function convertQuoteToSale(quoteId){
-  if(!requireOwner())return;
+  if(!canPerform('quotation')){ alert('This action is available to approved owner and staff accounts.'); return; }
   const q = (db.quotations||[]).find(x=>x.id===quoteId);
   if(!q){ alert('Quotation not found.'); return; }
   if(!confirm('Convert '+q.quoteNo+' into a sale bill? It will open in the Sale screen for you to confirm.')) return;
@@ -3653,6 +3671,47 @@ function openPrintPreview(type, id){
 }
 function closePrintPreview(back){ printDoc = null; setScreen(back||'dashboard'); }
 function printNow(){ window.print(); }
+function saleShareText(sale){
+  const shop=db.shopInfo||{}, lines=[shop.name||'Hammad World'];
+  lines.push('Sale bill: '+(sale.billNo||sale.id), 'Date: '+(sale.date||''), 'Customer: '+(sale.customer||'Walk-in'));
+  lines.push('');
+  (sale.items||[]).forEach((it,idx)=>{
+    const boxes=Number(it.boxQty||0), pieces=Number(it.pieceQty||0);
+    const qty=(boxes?boxes+' box'+(boxes===1?'':'es'):'')+(boxes&&pieces?' + ':'')+(pieces?pieces+' piece'+(pieces===1?'':'s'):'');
+    const gross=boxes*Number(it.boxPrice||0)+pieces*Number(it.piecePrice||0);
+    const afterDiscount=gross*(1-Number(it.discount||0)/100);
+    lines.push((idx+1)+'. '+(it.itemName||'Item')+' — '+(qty||'0 pieces')+' — '+fmt(afterDiscount));
+  });
+  lines.push('', 'Total: '+fmt(sale.totalAmount||0));
+  if(shop.address)lines.push('Address: '+shop.address);
+  if(shop.phone)lines.push('Phone: '+shop.phone);
+  return lines.join('\n');
+}
+function getSaleForShare(id){
+  const sale=(db.sales||[]).find(s=>s.id===id);
+  if(!sale)throw Error('Sale bill not found.');
+  return sale;
+}
+function shareSaleWhatsApp(id){
+  try{
+    const sale=getSaleForShare(id), text=saleShareText(sale);
+    window.open('https://wa.me/?text='+encodeURIComponent(text),'_blank','noopener,noreferrer');
+  }catch(e){alert(e.message);}
+}
+async function copySaleShareText(text){
+  if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);return;}
+  const area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();
+  const copied=document.execCommand&&document.execCommand('copy');area.remove();if(!copied)throw Error('Sharing is not supported in this browser.');
+}
+async function shareSaleBill(id){
+  try{
+    const sale=getSaleForShare(id), text=saleShareText(sale), title='Sale bill '+(sale.billNo||sale.id);
+    if(navigator.share){await navigator.share({title,text});return;}
+    await copySaleShareText(text);alert('Bill details copied. You can paste them into any app.');
+  }catch(e){if(e&&e.name!=='AbortError')alert(e.message||String(e));}
+}
+window.shareSaleWhatsApp=shareSaleWhatsApp;
+window.shareSaleBill=shareSaleBill;
 function renderPrintPreview(){
   if(!printDoc) return `<div class="empty">Nothing to show.</div>`;
   const { type, id } = printDoc;
@@ -3727,9 +3786,10 @@ function renderPrintPreview(){
         <div class="step" style="margin-top:14px;text-align:center;">Line totals reflect discounts and tax. This is a system-generated document from ${escapeHtml(shop.name||'Hammad World')}.</div>
       </div>
     </div>
-    <div class="no-print" style="display:flex;gap:8px;">
+    <div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn btn-ghost" onclick="closePrintPreview()">← Back</button>
       <button class="btn btn-primary" onclick="printNow()">🖨 Print / Save as PDF</button>
+      ${type==='sale' ? `<button class="btn btn-ghost" onclick="shareSaleWhatsApp('${inlineValue(id)}')">WhatsApp</button><button class="btn btn-ghost" onclick="shareSaleBill('${inlineValue(id)}')">Share bill</button>` : ''}
     </div>
   `;
 }
@@ -3796,7 +3856,7 @@ document.addEventListener('keydown', function(e){
 });
 
 /* HAMMAD WORLD reliability revision 2026-09-18. Financial amounts are INR. */
-const HW_VERSION='2026.09.22-r12-blank-number-entry';
+const HW_VERSION='2026.09.22-r13-bill-share-staff-quote';
 let hwExpectedLocal=localStorage.getItem(DB_KEY), hwCloudReady=false, hwCloudError='', hwBusy=new Set(), hwPendingOpenings=[];
 const hwCollections=['stock','sales','purchases','saleReturns','purchaseReturns','openingStock','parties','payments','expenses','staff','staffLedger','quotations','auditLog'];
 // Staff subscribe to the shop records needed to verify deliveries and enter bills.
@@ -3842,9 +3902,9 @@ async function resolvePurchaseItems(items,cloud){const seen=new Map();for(const 
 function groupedIncoming(items,landed){const g=Object.create(null);items.forEach((it,i)=>{const x=g[it.sku]||(g[it.sku]={qty:0,value:0,item:it});if(Number(x.item.piecesPerBox)!==Number(it.piecesPerBox))throw Error('One product cannot have different box sizes on the same entry.');x.qty+=units(it,'purchase');x.value+=landed[i];x.item=it;});return g;}
 function incomingStock(s,g,id){if(s?.mergedInto)throw Error('This product was merged. Reload and select the surviving product.');if(s&&Number(s.piecesPerBox)!==Number(g.item.piecesPerBox))throw Error('Use a separate product for a different box size.');const prior=numeric(s?.qty||0,'Current stock');return {...(s&&!isOwner()?{purchaseRate:Number(g.item.rate)}:productMeta(g.item,id)),...(!s?{_historyTracked:true}:{}),qty:prior+g.qty,avgCost:(prior* (s?avgOf(s):0)+g.value)/(prior+g.qty)};}
 function assertTxnSize(ids){if(ids.length>400)throw Error('Split this entry into batches of at most 400 different products. There is no limit on the number of bills.');}
-async function saveSale(){return guarded('sale',async()=>{checkSale(saleDraft.items);validateCommonDraft(saleDraft);const d=clone(saleDraft);if(d.fromQuoteId&&!isOwner())throw Error('Quotation conversion is owner-only.');d.items=ensureLines(d.items);for(const it of d.items){const s=stockById(it.stockId);if(!s)throw Error('Product no longer exists.');it.stockId=s.id;}const totals=saleTotals(d.items,d),needs=aggregateSaleNeeds(d.items);if(!saleDraft.operationId)saleDraft.operationId=uid();const operationId=saleDraft.operationId;let saved;
- if(CLOUD_MODE){const billNo=await nextBillNoCloud('sale'),ref=fsDB.collection('sales').doc(operationId);await fsDB.runTransaction(async tx=>{const existing=await tx.get(ref);if(existing.exists){saved={id:ref.id,...existing.data()};return;}const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id));const snaps=await Promise.all(refs.map(r=>tx.get(r)));let quoteSnap=null,quoteRef=null;if(d.fromQuoteId){quoteRef=fsDB.collection('quotations').doc(d.fromQuoteId);quoteSnap=await tx.get(quoteRef);if(!quoteSnap.exists||quoteSnap.data().status==='converted')throw Error('This quotation is already converted or missing.');}const info={};snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Not enough stock; reload the product list.');info[ids[i]]=s.data();});d.items.forEach(it=>it.costAtSale=avgOf(info[it.stockId]));saved={id:ref.id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId,...actorFields(),stockChanges:stockChanges(needs,-1),createdAt:firebase.firestore.FieldValue.serverTimestamp()};refs.forEach((r,i)=>tx.update(r,staffStockUpdate(info[ids[i]].qty-needs[ids[i]],operationId,'sales')));tx.set(ref,saved);if(quoteRef)tx.update(quoteRef,{status:'converted',convertedToBill:billNo});});upsert('sales',saved);}
- else localCommit(state=>{if(d.fromQuoteId){const q=state.quotations.find(q=>q.id===d.fromQuoteId);if(!q||q.status==='converted')throw Error('This quotation is already converted or missing.');}for(const [id,need]of Object.entries(needs)){if(stockById(id,state).qty<need)throw Error('Not enough stock for this sale.');}d.items.forEach(it=>it.costAtSale=avgOf(stockById(it.stockId,state)));const id=nextId('SAL'),billNo=nextBillNo('sale');saved={id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId};for(const [sid,need]of Object.entries(needs))Object.assign(stockById(sid,state),{qty:stockById(sid,state).qty-need,_hasDownstream:true});state.sales.push(saved);if(d.fromQuoteId)Object.assign(state.quotations.find(q=>q.id===d.fromQuoteId),{status:'converted',convertedToBill:billNo});auditIn(state,'Sale created',billNo);});saleDraft={customer:'',partyId:null,paidInFull:true,amountPaid:0,gstMode:'included',items:[],additionalCharges:[],billDiscount:0};syncCatalogItem();openPrintPreview('sale',saved.id);});}
+async function saveSale(){return guarded('sale',async()=>{checkSale(saleDraft.items);validateCommonDraft(saleDraft);const d=clone(saleDraft);if(d.fromQuoteId&&!canPerform('quotation'))throw Error('Quotation conversion is restricted to approved accounts.');d.items=ensureLines(d.items);for(const it of d.items){const s=stockById(it.stockId);if(!s)throw Error('Product no longer exists.');it.stockId=s.id;}const totals=saleTotals(d.items,d),needs=aggregateSaleNeeds(d.items);if(!saleDraft.operationId)saleDraft.operationId=uid();const operationId=saleDraft.operationId;let saved;
+ if(CLOUD_MODE){const billNo=await nextBillNoCloud('sale'),ref=fsDB.collection('sales').doc(operationId);await fsDB.runTransaction(async tx=>{const existing=await tx.get(ref);if(existing.exists){saved={id:ref.id,...existing.data()};return;}const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id));const snaps=await Promise.all(refs.map(r=>tx.get(r)));let quoteSnap=null,quoteRef=null;if(d.fromQuoteId){quoteRef=fsDB.collection('quotations').doc(d.fromQuoteId);quoteSnap=await tx.get(quoteRef);if(!quoteSnap.exists||quoteSnap.data().status==='converted')throw Error('This quotation is already converted or missing.');}const info={};snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Not enough stock; reload the product list.');info[ids[i]]=s.data();});d.items.forEach(it=>it.costAtSale=avgOf(info[it.stockId]));saved={id:ref.id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId,sourceQuoteId:d.fromQuoteId||null,...actorFields(),stockChanges:stockChanges(needs,-1),createdAt:firebase.firestore.FieldValue.serverTimestamp()};refs.forEach((r,i)=>tx.update(r,staffStockUpdate(info[ids[i]].qty-needs[ids[i]],operationId,'sales')));tx.set(ref,saved);if(quoteRef)tx.update(quoteRef,{status:'converted',convertedToBill:billNo,convertedSaleId:operationId});});upsert('sales',saved);}
+ else localCommit(state=>{if(d.fromQuoteId){const q=state.quotations.find(q=>q.id===d.fromQuoteId);if(!q||q.status==='converted')throw Error('This quotation is already converted or missing.');}for(const [id,need]of Object.entries(needs)){if(stockById(id,state).qty<need)throw Error('Not enough stock for this sale.');}d.items.forEach(it=>it.costAtSale=avgOf(stockById(it.stockId,state)));const id=nextId('SAL'),billNo=nextBillNo('sale');saved={id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId,sourceQuoteId:d.fromQuoteId||null};for(const [sid,need]of Object.entries(needs))Object.assign(stockById(sid,state),{qty:stockById(sid,state).qty-need,_hasDownstream:true});state.sales.push(saved);if(d.fromQuoteId)Object.assign(state.quotations.find(q=>q.id===d.fromQuoteId),{status:'converted',convertedToBill:billNo,convertedSaleId:id});auditIn(state,'Sale created',billNo);});saleDraft={customer:'',partyId:null,paidInFull:true,amountPaid:0,gstMode:'included',items:[],additionalCharges:[],billDiscount:0};syncCatalogItem();openPrintPreview('sale',saved.id);});}
 async function saveSaleCloud(){return saveSale();}
 async function savePurchase(){return guarded('purchase',async()=>{checkPurchase(purchaseDraft.items);validateCommonDraft(purchaseDraft);const d=clone(purchaseDraft);await resolvePurchaseItems(d.items,CLOUD_MODE);const totals=purchaseTotals(d.items,d),groups=groupedIncoming(d.items,totals.landed);delete totals.landed;if(!purchaseDraft.operationId)purchaseDraft.operationId=uid();const operationId=purchaseDraft.operationId;let saved;const full=amount(totals.actualAmountPaid);const fields={date:todayStr(),supplier:d.supplier||'Unknown supplier',supplierBillNo:d.supplierBillNo||'',actualAmountPaidExplicit:d.actualAmountPaid!==''&&d.actualAmountPaid!=null,partyId:d.partyId||null,gstMode:d.gstMode,items:d.items,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):full,rev:0,operationId};
  if(CLOUD_MODE){const ref=fsDB.collection('purchases').doc(operationId),billNo=await nextBillNoCloud('purchase');await fsDB.runTransaction(async tx=>{const exists=await tx.get(ref);if(exists.exists){saved={id:ref.id,...exists.data()};return;}const ids=Object.keys(groups);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),snaps=await Promise.all(refs.map(r=>tx.get(r)));const stocks=ids.map((id,i)=>incomingStock(snaps[i].exists?snaps[i].data():null,groups[id],id));stocks.forEach((s,i)=>tx.set(refs[i],{...s,...(!isServerOwner()?{_staffOperationId:operationId,_staffOperationType:'purchases',_staffActor:firebase.auth().currentUser.uid}:{})},{merge:true}));saved={id:ref.id,billNo,...fields,...actorFields(),stockChanges:Object.fromEntries(ids.map(id=>[id,groups[id].qty])),stockValues:Object.fromEntries(ids.map(id=>[id,groups[id].value])),createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.set(ref,saved);});upsert('purchases',saved);}
@@ -4007,6 +4067,12 @@ function renderReadOnlyBill(){
  const purchase=ctx.type==='purchase';const rows=(rec.items||[]).map(it=>'<div class="list-row"><div><b>'+escapeHtml(it.itemName||it.stockId||it.sku)+'</b><div>'+escapeHtml(purchase?incomingQuantityLabel(it):(it.boxQty||0)+' boxes + '+(it.pieceQty||0)+' pieces')+'</div><div>Rate: '+escapeHtml((purchase?incomingRateLabel(it):fmt(it.boxPrice)+' / box'))+' · GST '+escapeHtml(it.gst||0)+'%</div></div><div>'+escapeHtml(fmt(purchase?incomingAmount(it):(it.boxQty||0)*(it.boxPrice||0)+(it.pieceQty||0)*(it.piecePrice||0)))+'</div></div>').join('');
  return '<button class="btn btn-ghost" onclick="goBackFromBillDetail()">← Back</button><div class="card"><h3>'+escapeHtml(rec.billNo||rec.id)+'</h3><p>'+escapeHtml(rec.date)+' · '+escapeHtml(purchase?rec.supplier:rec.customer)+'</p>'+(purchase?'<p>Supplier invoice: '+escapeHtml(rec.supplierBillNo||'—')+'</p><p>Bill value: '+escapeHtml(fmt((rec.totalAmount||0)+(rec.totalGst||0)))+' · Actual payable: '+escapeHtml(fmt(rec.actualAmountPaid??((rec.totalAmount||0)+(rec.totalGst||0)+(rec.additionalChargesTotal||0))))+'</p>':'<p>Total: '+escapeHtml(fmt(rec.totalAmount||0))+'</p>')+'</div><div class="card"><h3>Products to verify</h3>'+rows+'</div><button class="btn btn-ghost" onclick="openPrintPreview(\''+inlineValue(ctx.type)+'\',\''+inlineValue(ctx.id)+'\')">View / print bill</button>';
 }
+const hwBaseReadOnlyBill=renderReadOnlyBill;
+renderReadOnlyBill=function(){
+ const content=hwBaseReadOnlyBill();
+ if(billDetailCtx.type!=='sale')return content;
+ return content+'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;"><button class="btn btn-ghost" onclick="shareSaleWhatsApp(\''+inlineValue(billDetailCtx.id)+'\')">WhatsApp</button><button class="btn btn-ghost" onclick="shareSaleBill(\''+inlineValue(billDetailCtx.id)+'\')">Share bill</button></div>';
+};
 
 function renderReadOnlyOpening(){const rec=db.openingStock.find(r=>r.id===openingDetailCtx.id);return rec?'<button class="btn btn-ghost" onclick="setScreen(\'fullLedger\')">← Ledger</button><div class="card"><h3>'+escapeHtml(rec.openingNo||rec.id)+'</h3><p>Read only — opening-stock changes are owner-only.</p></div>'+readOnlyItems(rec.items||[]):'<div class="empty">Entry not found.</div>';}
 
@@ -4037,7 +4103,7 @@ async function hwSyncQueueImpl(){
 async function hwQueueSale(){
  if(hwBusy.has('queueSale'))return;hwBusy.add('queueSale');try{if(!isApprovedUser())throw Error('Sign in first');checkSale(saleDraft.items);validateCommonDraft(saleDraft);if(!saleDraft.operationId)saleDraft.operationId=uid();const scope=hwQueueScope(),entry={key:scope+':'+saleDraft.operationId,scope,operationId:saleDraft.operationId,draft:clone(saleDraft),queuedAt:new Date().toISOString(),error:''};await hwStoreQueueEntry(entry);saleDraft={customer:'',partyId:null,paidInFull:true,amountPaid:0,gstMode:'included',items:[],additionalCharges:[],billDiscount:0};currentScreen='syncQueue';render();hwBusy.delete('queueSale');await hwSyncQueue();}catch(e){alert(e.message);}finally{hwBusy.delete('queueSale');}
 }
-function hwRenderQueue(){return '<div class="card">'+(hwLastSavedSale?'<button class="btn btn-primary" onclick="openPrintPreview(\'sale\',\''+inlineValue(hwLastSavedSale)+'\')">View / print saved bill</button>':'')+'<h3>Pending sales ('+hwQueue.length+')</h3><p>Pending sales are stored on this device. They appear in the owner portal only after the server confirms them. Stock and the final bill number are assigned during sync.</p><button class="btn btn-primary" onclick="hwSyncQueue()">Retry sync</button><p>'+escapeHtml(hwLastSync)+'</p>'+hwQueue.map(e=>'<div class="list-row"><div><b>'+escapeHtml(e.draft.customer||'Walk-in')+'</b><div>'+escapeHtml(e.queuedAt)+'</div><p>'+escapeHtml(e.reviewing?'Editing pending sale — save it again to resume sync':e.error||'Pending sync')+'</p><button class="btn btn-ghost" onclick="hwReviewPending(\''+inlineValue(e.operationId)+'\')">View pending sale</button><button class="btn btn-ghost" onclick="hwEditPending(\''+inlineValue(e.operationId)+'\')">Check status / edit</button></div></div>').join('')+'</div>';}
+function hwRenderQueue(){return '<div class="card">'+(hwLastSavedSale?'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;"><button class="btn btn-primary" onclick="openPrintPreview(\'sale\',\''+inlineValue(hwLastSavedSale)+'\')">View / print saved bill</button><button class="btn btn-ghost" onclick="shareSaleWhatsApp(\''+inlineValue(hwLastSavedSale)+'\')">WhatsApp</button><button class="btn btn-ghost" onclick="shareSaleBill(\''+inlineValue(hwLastSavedSale)+'\')">Share bill</button></div>':'')+'<h3>Pending sales ('+hwQueue.length+')</h3><p>Pending sales are stored on this device. They appear in the owner portal only after the server confirms them. Stock and the final bill number are assigned during sync.</p><button class="btn btn-primary" onclick="hwSyncQueue()">Retry sync</button><p>'+escapeHtml(hwLastSync)+'</p>'+hwQueue.map(e=>'<div class="list-row"><div><b>'+escapeHtml(e.draft.customer||'Walk-in')+'</b><div>'+escapeHtml(e.queuedAt)+'</div><p>'+escapeHtml(e.reviewing?'Editing pending sale — save it again to resume sync':e.error||'Pending sync')+'</p><button class="btn btn-ghost" onclick="hwReviewPending(\''+inlineValue(e.operationId)+'\')">View pending sale</button><button class="btn btn-ghost" onclick="hwEditPending(\''+inlineValue(e.operationId)+'\')">Check status / edit</button></div></div>').join('')+'</div>';}
 function hwReviewPending(id){const entry=hwQueue.find(e=>e.operationId===id);if(!entry)return;alert('Pending sale '+id+'\n'+entry.draft.items.map(i=>i.itemName+': '+i.boxQty+' boxes + '+i.pieceQty+' pieces').join('\n')+'\n\n'+(entry.error||'Awaiting sync')+'\nKeep this entry until its save status is reconciled. Do not create a second sale for the same customer.');}
 async function hwEditPending(id){
  const task=async()=>{if(hwQueueBusy)return;hwQueueBusy=true;try{await hwLoadQueue();const entry=hwQueue.find(e=>e.operationId===id);if(!entry)return;const snap=await fsDB.collection('sales').doc(id).get({source:'server'});if(snap.exists){const record={id:snap.id,...snap.data()};await hwOutbox('readwrite',s=>s.delete(entry.key));upsert('sales',record);hwLastSavedSale=record.id;hwLastSync='Saved '+record.billNo+' to owner portal';await hwLoadQueue();render();return;}entry.reviewing=true;await hwStoreQueueEntry(entry);saleDraft=clone(entry.draft);saleDraft.operationId=entry.operationId;saleScreenMode='new';setScreen('sales');}catch(e){alert('Could not confirm this entry’s status: '+e.message);}finally{hwQueueBusy=false;updateCloudBadge();}};
