@@ -434,7 +434,7 @@ function renderAdditionalChargesSection(draft){
             ${ADDITIONAL_CHARGE_CATEGORIES.map(c=>`<option>${escapeHtml(c)}</option>`).join('')}
           </select>
         </div>
-        <div class="field"><label>Amount</label><input id="newChargeAmount_${escapeHtml(draft===purchaseDraft?'purchase':'sale')}" type="number" placeholder="0"/></div>
+        <div class="field"><label>Amount</label><input id="newChargeAmount_${escapeHtml(draft===purchaseDraft?'purchase':'sale')}" type="number"/></div>
       </div>
       <button class="btn btn-ghost" onclick="addAdditionalCharge('${inlineValue(draft===purchaseDraft?'purchase':'sale')}')">+ Add charge</button>
       ${total>0 ? `<div class="step" style="margin-top:6px;">Additional charges total: <b>${escapeHtml(fmt(total))}</b></div>` : ''}
@@ -836,7 +836,7 @@ function renderPurchase(){
             <option value="no" ${escapeHtml(purchaseDraft.paidInFull===false?'selected':'')}>No, on credit / partial</option>
           </select>
         </div>
-        ${purchaseDraft.paidInFull===false ? `<div class="field"><label>Amount paid now</label><input type="number" value="${escapeHtml(purchaseDraft.amountPaid||0)}" oninput="purchaseDraft.amountPaid=Number(this.value)"/></div>` : ''}
+        ${purchaseDraft.paidInFull===false ? `<div class="field"><label>Amount paid now</label><input type="number" value="${escapeHtml(entryNumber(purchaseDraft.amountPaid))}" oninput="purchaseDraft.amountPaid=Number(this.value)"/></div>` : ''}
       </div>` : ''}
       <div class="field"><label>GST calculation</label>
         <div class="segment">
@@ -1158,14 +1158,14 @@ function renderSales(){
       <div class="li-main">${escapeHtml(it.itemName)} <span style="color:var(--ink-500);font-weight:500;">(${escapeHtml(it.batch||'—')})</span></div>
       <div class="step">MRP ${escapeHtml(fmt(it.mrpBoxPrice))} / box • ${escapeHtml(it.piecesPerBox)} pcs/box${Number(it.boxPrice)!==Number(it.mrpBoxPrice) ? ' • <b style="color:var(--clay-900);">rate changed</b>' : ''}</div>
       <div class="row2" style="margin-top:6px;">
-        <div class="field"><label>Rate per box</label><input type="number" value="${escapeHtml(it.boxPrice)}" onchange="updateSaleRate(${inlineValue(idx)},'box',this.value)"/></div>
-        <div class="field"><label>Rate per piece</label><input type="number" value="${escapeHtml(Number(it.piecePrice).toFixed(2))}" onchange="updateSaleRate(${inlineValue(idx)},'piece',this.value)"/></div>
+        <div class="field"><label>Rate per box</label><input type="number" value="${escapeHtml(entryNumber(it.boxPrice))}" onchange="updateSaleRate(${inlineValue(idx)},'box',this.value)"/></div>
+        <div class="field"><label>Rate per piece</label><input type="number" value="${escapeHtml(entryNumber(Number(it.piecePrice).toFixed(2)))}" onchange="updateSaleRate(${inlineValue(idx)},'piece',this.value)"/></div>
       </div>
       <div class="row2">
-        <div class="field"><label>Boxes</label><input type="number" value="${escapeHtml(it.boxQty||'')}" placeholder="0" onchange="updateSaleItem(${inlineValue(idx)},'boxQty',this.value)"/></div>
-        <div class="field"><label>Loose pieces</label><input type="number" value="${escapeHtml(it.pieceQty||'')}" placeholder="0" onchange="updateSaleItem(${inlineValue(idx)},'pieceQty',this.value)"/></div>
+        <div class="field"><label>Boxes</label><input type="number" value="${escapeHtml(it.boxQty||'')}" onchange="updateSaleItem(${inlineValue(idx)},'boxQty',this.value)"/></div>
+        <div class="field"><label>Loose pieces</label><input type="number" value="${escapeHtml(it.pieceQty||'')}" onchange="updateSaleItem(${inlineValue(idx)},'pieceQty',this.value)"/></div>
       </div>
-      <div class="field"><label>Extra discount % (optional)</label><input type="number" value="${escapeHtml(it.discount||'')}" placeholder="0" onchange="updateSaleItem(${inlineValue(idx)},'discount',this.value)"/></div>
+      <div class="field"><label>Extra discount % (optional)</label><input type="number" value="${escapeHtml(it.discount||'')}" onchange="updateSaleItem(${inlineValue(idx)},'discount',this.value)"/></div>
       <div style="font-size:12px;color:var(--ink-500);">GST ${escapeHtml(it.gst)}% • Line total <b style="color:var(--clay-900);">${escapeHtml(fmt(br.total))}</b></div>
     </div>`;
   }).join('');
@@ -1211,7 +1211,7 @@ function renderSales(){
             <option value="no" ${escapeHtml(saleDraft.paidInFull===false?'selected':'')}>No, on credit / partial</option>
           </select>
         </div>
-        ${saleDraft.paidInFull===false ? `<div class="field"><label>Amount paid now</label><input type="number" value="${escapeHtml(saleDraft.amountPaid||0)}" oninput="saleDraft.amountPaid=Number(this.value)"/></div>` : ''}
+        ${saleDraft.paidInFull===false ? `<div class="field"><label>Amount paid now</label><input type="number" value="${escapeHtml(entryNumber(saleDraft.amountPaid))}" oninput="saleDraft.amountPaid=Number(this.value)"/></div>` : ''}
       </div>` : ''}
       <div class="field"><label>GST calculation</label>
         <div class="segment">
@@ -1237,7 +1237,7 @@ function renderSales(){
       <div class="total-line"><span>Item total</span><span>${escapeHtml(fmt(totals.gross))}</span></div>
       <div class="total-line"><span>Item-level discount</span><span>-${escapeHtml(fmt(totals.disc))}</span></div>
       <div class="total-line"><span>GST${escapeHtml(gstMode==='included'?' (included above)':'')}</span><span>${escapeHtml(fmt(totals.gst))}</span></div>
-      <div class="field" style="margin-top:8px;"><label>Bill discount % (optional, applied on top)</label><input type="number" value="${escapeHtml(saleDraft.billDiscount||'')}" placeholder="0" onchange="saleDraft.billDiscount=Number(this.value);render()"/></div>
+      <div class="field" style="margin-top:8px;"><label>Bill discount % (optional, applied on top)</label><input type="number" value="${escapeHtml(saleDraft.billDiscount||'')}" onchange="saleDraft.billDiscount=Number(this.value);render()"/></div>
       ${saleDraft.billDiscount>0 ? `<div class="total-line"><span>Bill discount</span><span>-${escapeHtml(fmt(totals.total*saleDraft.billDiscount/100))}</span></div>` : ''}
       <div class="total-line"><span>Additional charges</span><span>${escapeHtml(fmt((saleDraft.additionalCharges||[]).reduce((a,c)=>a+Number(c.amount||0),0)))}</span></div>
       <div class="total-line grand"><span>Customer pays</span><span>${escapeHtml(fmt(totals.total*(1-(saleDraft.billDiscount||0)/100)+(saleDraft.additionalCharges||[]).reduce((a,c)=>a+Number(c.amount||0),0)))}</span></div>
@@ -1326,8 +1326,8 @@ function renderSaleReturn(){
         ? `Can still return: ${escapeHtml(it.soldBoxQty)} boxes + ${escapeHtml(it.soldPieceQty)} pieces (sold ${escapeHtml(it.originalBoxQty)}, ${escapeHtml(it.alreadyReturnedBoxQty)} box / ${escapeHtml(it.alreadyReturnedPieceQty)} pc already returned)`
         : `Sold: ${escapeHtml(it.soldBoxQty)} boxes + ${escapeHtml(it.soldPieceQty)} pieces`}</div>
       <div class="row2" style="margin-top:6px;">
-        <div class="field"><label>Return boxes</label><input type="number" value="${escapeHtml(it.boxQty||'')}" placeholder="0" onchange="updateSaleReturnItem(${inlineValue(idx)},'boxQty',this.value)"/></div>
-        <div class="field"><label>Return pieces</label><input type="number" value="${escapeHtml(it.pieceQty||'')}" placeholder="0" onchange="updateSaleReturnItem(${inlineValue(idx)},'pieceQty',this.value)"/></div>
+        <div class="field"><label>Return boxes</label><input type="number" value="${escapeHtml(it.boxQty||'')}" onchange="updateSaleReturnItem(${inlineValue(idx)},'boxQty',this.value)"/></div>
+        <div class="field"><label>Return pieces</label><input type="number" value="${escapeHtml(it.pieceQty||'')}" onchange="updateSaleReturnItem(${inlineValue(idx)},'pieceQty',this.value)"/></div>
       </div>
     </div>
   `).join('');
@@ -1851,8 +1851,8 @@ function renderStockDetail(){
       <h3>Correct stock quantity</h3>
       <div class="step">Use this to fix a data-entry mistake or a physical count difference — directly, without needing to edit a bill. This only changes quantity; cost stays as-is.</div>
       <div class="row2">
-        <div class="field"><label>Correct boxes</label><input id="adjustBoxes" type="number" value="${escapeHtml(boxes)}"/></div>
-        <div class="field"><label>Correct loose pieces</label><input id="adjustPieces" type="number" value="${escapeHtml(loose)}"/></div>
+        <div class="field"><label>Correct boxes</label><input id="adjustBoxes" type="number" value="${escapeHtml(entryNumber(boxes))}"/></div>
+        <div class="field"><label>Correct loose pieces</label><input id="adjustPieces" type="number" value="${escapeHtml(entryNumber(loose))}"/></div>
       </div>
       <div class="field"><label>Reason</label>
         <select id="adjustReason">
@@ -1871,7 +1871,7 @@ function renderStockDetail(){
       <h3>Low stock alert</h3>
       <div class="step">Flag this product as "Low stock" once it drops to this many boxes or fewer. Default is 1 box.</div>
       <div class="row2">
-        <div class="field"><label>Boxes</label><input id="lowStockBoxes" type="number" value="${escapeHtml(Math.floor(lowStockThresholdFor(s)/(s.piecesPerBox||1)))}"/></div>
+        <div class="field"><label>Boxes</label><input id="lowStockBoxes" type="number" value="${escapeHtml(entryNumber(Math.floor(lowStockThresholdFor(s)/(s.piecesPerBox||1))))}"/></div>
         <button class="btn btn-ghost" style="align-self:flex-end;" onclick="saveLowStockThreshold('${inlineValue(s.id)}')">Save</button>
       </div>
     </div>
@@ -2353,7 +2353,7 @@ function renderPartiesList(){
         <div class="field"><label>GST Number (optional)</label><input id="newPartyGstin" placeholder="18ADOPH1433M1ZB"/></div>
       </div>
       <div class="field"><label>Address (optional)</label><input id="newPartyAddress"/></div>
-      <div class="field"><label>Opening balance (if they already owe you / you already owe them, before using this app)</label><input id="newPartyOpening" type="number" value="0"/></div>
+      <div class="field"><label>Opening balance (if they already owe you / you already owe them, before using this app)</label><input id="newPartyOpening" type="number" value=""/></div>
       <div class="step">${escapeHtml(partyFormType==='customer' ? 'Positive = they owe you.' : 'Positive = you owe them.')} Leave 0 if starting fresh.</div>
       <button class="btn btn-primary" onclick="saveParty()">+ Add ${escapeHtml(partyFormType)}</button>
     </div>
@@ -2724,7 +2724,7 @@ function renderPartyDetail(){
           <div class="field"><label>GSTIN</label><input id="editPartyGstin" value="${escapeHtml(party.gstin||'')}"/></div>
         </div>
         <div class="field"><label>Address</label><input id="editPartyAddress" value="${escapeHtml(party.address||'')}"/></div>
-        <div class="field"><label>Opening balance (${escapeHtml(isSupplier?'positive = you owe them':'positive = they owe you')})</label><input id="editPartyOpening" type="number" value="${escapeHtml(party.openingBalance||0)}"/></div>
+        <div class="field"><label>Opening balance (${escapeHtml(isSupplier?'positive = you owe them':'positive = they owe you')})</label><input id="editPartyOpening" type="number" value="${escapeHtml(entryNumber(party.openingBalance))}"/></div>
         <div class="step">This is separate from bills already saved in the app — it only covers balance from before you started using it.</div>
         <div style="display:flex;gap:8px;">
           <button class="btn btn-primary" style="flex:1;" onclick="savePartyEdits('${inlineValue(party.id)}')">Save</button>
@@ -2750,7 +2750,7 @@ function renderPartyDetail(){
     <div class="card">
       <h3>Record a payment</h3>
       <div class="row2">
-        <div class="field"><label>Amount</label><input id="paymentAmount" type="number" placeholder="0"/></div>
+        <div class="field"><label>Amount</label><input id="paymentAmount" type="number"/></div>
         <div class="field"><label>Note (optional)</label><input id="paymentNote" placeholder="e.g. cash, UPI"/></div>
       </div>
       <button class="btn btn-primary" onclick="recordPayment('${inlineValue(party.id)}')">${escapeHtml(bal<0?'Record refund against credit':isSupplier?'Record payment made':'Record payment received')}</button>
@@ -2843,7 +2843,7 @@ function renderAddExpense(){
         </div>
       </div>
       <div class="row2">
-        <div class="field"><label>Amount</label><input id="expAmount" type="number" placeholder="0"/></div>
+        <div class="field"><label>Amount</label><input id="expAmount" type="number"/></div>
         <div class="field"><label>Bill ref (optional)</label><input id="expBillRef" placeholder="e.g. HWP00012"/></div>
       </div>
       <div class="field"><label>Note (optional)</label><input id="expNote"/></div>
@@ -2884,7 +2884,7 @@ function renderExpenses(){
         </div>
       </div>
       <div class="row2">
-        <div class="field"><label>Amount</label><input id="expAmount" type="number" placeholder="0" value="${escapeHtml(editing?editing.amount:'')}"/></div>
+        <div class="field"><label>Amount</label><input id="expAmount" type="number" value="${escapeHtml(editing?editing.amount:'')}"/></div>
         <div class="field"><label>Bill ref (optional)</label><input id="expBillRef" placeholder="e.g. HWP00012" value="${escapeHtml(editing?(editing.billRef||''):'')}"/></div>
       </div>
       <div class="field"><label>Note (optional)</label><input id="expNote" value="${escapeHtml(editing?(editing.note||''):'')}"/></div>
@@ -2986,8 +2986,8 @@ function renderStaffList(){
         <div class="field"><label>Role (optional)</label><input id="newStaffRole" placeholder="e.g. Helper"/></div>
         <div class="field"><label>Phone (optional)</label><input id="newStaffPhone"/></div>
       </div>
-      <div class="field"><label>Monthly salary (optional, for reference)</label><input id="newStaffSalary" type="number" placeholder="0"/></div>
-      <div class="field"><label>Opening balance (pending, if any)</label><input id="newStaffOpening" type="number" value="0"/></div>
+      <div class="field"><label>Monthly salary (optional, for reference)</label><input id="newStaffSalary" type="number"/></div>
+      <div class="field"><label>Opening balance (pending, if any)</label><input id="newStaffOpening" type="number" value=""/></div>
       <button class="btn btn-primary" onclick="saveStaff()">+ Add staff</button>
     </div>
     <div class="card"><h3>Staff (${escapeHtml(db.staff.length)})</h3>${rows || `<div class="empty">No staff added yet.</div>`}</div>
@@ -3055,7 +3055,7 @@ function renderStaffDetail(){
             <option value="advance">Advance (reduces pending)</option>
           </select>
         </div>
-        <div class="field"><label>Amount</label><input id="staffEntryAmount" type="number" placeholder="0"/></div>
+        <div class="field"><label>Amount</label><input id="staffEntryAmount" type="number"/></div>
       </div>
       <div class="row2">
         <div class="field"><label>Date</label><input id="staffEntryDate" type="date" value="${escapeHtml(todayStr())}"/></div>
@@ -3283,14 +3283,14 @@ function renderQuoteForm(){
       <div class="li-main">${escapeHtml(it.itemName)} <span style="color:var(--ink-500);font-weight:500;">(${escapeHtml(it.batch||'—')})</span></div>
       <div class="step">MRP ${escapeHtml(fmt(it.mrpBoxPrice))} / box • ${escapeHtml(it.piecesPerBox)} pcs/box${Number(it.boxPrice)!==Number(it.mrpBoxPrice) ? ' • <b style="color:var(--clay-900);">rate changed</b>' : ''}</div>
       <div class="row2" style="margin-top:6px;">
-        <div class="field"><label>Rate per box</label><input type="number" value="${escapeHtml(it.boxPrice)}" onchange="updateQuoteRate(${inlineValue(idx)},'box',this.value)"/></div>
-        <div class="field"><label>Rate per piece</label><input type="number" value="${escapeHtml(Number(it.piecePrice).toFixed(2))}" onchange="updateQuoteRate(${inlineValue(idx)},'piece',this.value)"/></div>
+        <div class="field"><label>Rate per box</label><input type="number" value="${escapeHtml(entryNumber(it.boxPrice))}" onchange="updateQuoteRate(${inlineValue(idx)},'box',this.value)"/></div>
+        <div class="field"><label>Rate per piece</label><input type="number" value="${escapeHtml(entryNumber(Number(it.piecePrice).toFixed(2)))}" onchange="updateQuoteRate(${inlineValue(idx)},'piece',this.value)"/></div>
       </div>
       <div class="row2">
-        <div class="field"><label>Boxes</label><input type="number" value="${escapeHtml(it.boxQty||'')}" placeholder="0" onchange="updateQuoteItem(${inlineValue(idx)},'boxQty',this.value)"/></div>
-        <div class="field"><label>Loose pieces</label><input type="number" value="${escapeHtml(it.pieceQty||'')}" placeholder="0" onchange="updateQuoteItem(${inlineValue(idx)},'pieceQty',this.value)"/></div>
+        <div class="field"><label>Boxes</label><input type="number" value="${escapeHtml(it.boxQty||'')}" onchange="updateQuoteItem(${inlineValue(idx)},'boxQty',this.value)"/></div>
+        <div class="field"><label>Loose pieces</label><input type="number" value="${escapeHtml(it.pieceQty||'')}" onchange="updateQuoteItem(${inlineValue(idx)},'pieceQty',this.value)"/></div>
       </div>
-      <div class="field"><label>Extra discount % (optional)</label><input type="number" value="${escapeHtml(it.discount||'')}" placeholder="0" onchange="updateQuoteItem(${inlineValue(idx)},'discount',this.value)"/></div>
+      <div class="field"><label>Extra discount % (optional)</label><input type="number" value="${escapeHtml(it.discount||'')}" onchange="updateQuoteItem(${inlineValue(idx)},'discount',this.value)"/></div>
       <div data-incoming-line="${idx}" style="font-size:12px;color:var(--ink-500);">Line total <b>${escapeHtml(fmt(gross-disc))}</b></div>
     </div>`;
   }).join('');
@@ -3796,7 +3796,7 @@ document.addEventListener('keydown', function(e){
 });
 
 /* HAMMAD WORLD reliability revision 2026-09-18. Financial amounts are INR. */
-const HW_VERSION='2026.09.22-r11-pieces-opening';
+const HW_VERSION='2026.09.22-r12-blank-number-entry';
 let hwExpectedLocal=localStorage.getItem(DB_KEY), hwCloudReady=false, hwCloudError='', hwBusy=new Set(), hwPendingOpenings=[];
 const hwCollections=['stock','sales','purchases','saleReturns','purchaseReturns','openingStock','parties','payments','expenses','staff','staffLedger','quotations','auditLog'];
 // Staff subscribe to the shop records needed to verify deliveries and enter bills.
@@ -3812,6 +3812,7 @@ function staffStockUpdate(qty,id,type,extra={}){const change={qty,_hasDownstream
 function stockChanges(needs,sign){return Object.fromEntries(Object.entries(needs).map(([id,n])=>[id,sign*n]));}
 
 function clone(v){return JSON.parse(JSON.stringify(v));}
+function entryNumber(v){return v==null||v===''||Number(v)===0?'':v;}
 function amount(v){const n=Number(v);if(!Number.isFinite(n))throw Error('Enter a finite amount.');return Math.round((n+Number.EPSILON)*100)/100;}
 function numeric(v,label,min=0,max=Number.MAX_SAFE_INTEGER){const n=Number(v??0);if(!Number.isFinite(n)||n<min||n>max)throw Error(label+' must be between '+min+' and '+max+'.');return n;}
 function units(it,kind='sale'){for(const key of ['pieceQty','freePieceQty'])if(it[key]!=null&&!Number.isSafeInteger(numeric(it[key],key==='pieceQty'?'Pieces':'Free pieces')))throw Error('Pieces must be whole numbers.');const p=numeric(it.piecesPerBox,'Pieces per box',1);const q=kind==='sale'?numeric(it.boxQty||0,'Boxes')*p+numeric(it.pieceQty||0,'Pieces'):(numeric(it.qty||0,'Boxes')+numeric(it.freeQty||0,'Free boxes'))*p+numeric(it.pieceQty||0,'Pieces')+numeric(it.freePieceQty||0,'Free pieces');if(!Number.isSafeInteger(q)||!Number.isSafeInteger(p))throw Error('Quantities must resolve to a whole number of pieces.');return q;}
@@ -4145,7 +4146,7 @@ function renderIncomingFields(it,idx,kind){
  const p=Number(it.piecesPerBox)||1,rateKey=opening?'cost':'rate',unit=piece?'piece':'box',locked=!!it.sku||edit||isReturn;
  // Historical one-piece products are shown naturally without rewriting their saved lines.
  const paid=Number(it.qty||0)*p+Number(it.pieceQty||0),free=Number(it.freeQty||0)*p+Number(it.freePieceQty||0);
- const field=(label,key,value,readOnly=false)=>`<div class="field"><label for="incoming_${kind}_${idx}_${key}">${label}</label><input id="incoming_${kind}_${idx}_${key}" data-incoming-kind="${kind}" data-incoming-field="${key}" type="number" min="0" step="${['qty','pieceQty','freeQty','freePieceQty','piecesPerBox'].includes(key)?'1':'any'}" value="${escapeHtml(value??'')}" ${readOnly?'readonly':''} oninput="updateIncomingField('${kind}',${idx},'${key}',this.value)"></div>`;
+ const field=(label,key,value,readOnly=false)=>`<div class="field"><label for="incoming_${kind}_${idx}_${key}">${label}</label><input id="incoming_${kind}_${idx}_${key}" data-incoming-kind="${kind}" data-incoming-field="${key}" type="number" min="0" step="${['qty','pieceQty','freeQty','freePieceQty','piecesPerBox'].includes(key)?'1':'any'}" value="${escapeHtml(entryNumber(value))}" ${readOnly?'readonly':''} oninput="updateIncomingField('${kind}',${idx},'${key}',this.value)"></div>`;
  return `<div class="field"><label for="incoming_${kind}_${idx}_unit">Entry unit</label><select id="incoming_${kind}_${idx}_unit" onchange="changeIncomingMode('${kind}',${idx},this.value)">${[['box','Box'],['piece','Piece'],['mixed','Box + loose pieces']].map(([v,t])=>`<option value="${v}" ${mode===v?'selected':''}>${t}</option>`).join('')}</select></div>
  ${piece&&p===1?'<div class="step">Individual pieces — no box quantity required.</div>':field('Pieces per box'+(locked?' (fixed)':''),'piecesPerBox',it.piecesPerBox||'',locked)}
  <div class="row2">${field((opening?'Opening':isReturn?'Return':'Paid')+' quantity ('+(piece?'pieces':'boxes')+')',piece?'pieceQty':'qty',piece?paid:Number(it.qty||0))}${mixed?field('Loose pieces','pieceQty',it.pieceQty||0):''}</div>
