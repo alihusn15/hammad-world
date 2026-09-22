@@ -329,7 +329,7 @@ function showStockSuggestions(formType, idx, query){
     const boxes = Math.floor(s.qty/(s.piecesPerBox||1));
     return `
     <div class="list-row" style="cursor:pointer;" onclick="pickExistingStock('${inlineValue(formType)}',${inlineValue(idx)},'${inlineValue(s.id)}')">
-      <div><div class="li-main">${escapeHtml(s.itemName)}${s.batch?' • '+escapeHtml(s.batch):''}</div><div class="li-sub">${escapeHtml(s.category)} • ${escapeHtml(boxes)} box(es) in stock • ${escapeHtml(s.sku)}</div></div>
+      <div><div class="li-main">${escapeHtml(s.itemName)}${s.batch?' • '+escapeHtml(s.batch):''}</div><div class="li-sub">${escapeHtml(s.category)} • ${escapeHtml(stockQuantityLabel(s))} in stock • ${escapeHtml(s.sku)}</div></div>
       <div class="li-right" style="color:var(--gold-700, #B8860B);">Use this ✓</div>
     </div>`;
   }).join('') + `</div>`;
@@ -340,11 +340,14 @@ function pickExistingStock(formType, idx, stockId){
   const draft = formType==='purchase' ? purchaseDraft : openingStockDraft;
   const it = draft.items[idx];
   if(!it) return;
+  const wasPiece=incomingMode(it)==='piece', priorPacking=Number(it.piecesPerBox)||1;
   Object.assign(it, {
     sku: s.sku, itemName: s.itemName, category: s.category, subcategory: s.subcategory||'',
     material: s.material||'', size: s.size||'', batch: s.batch||'', piecesPerBox: s.piecesPerBox||1,
     gst: s.gst!=null ? s.gst : it.gst
   });
+  if(wasPiece)for(const k of ['rate','cost','mrp'])if(it[k]!=null)it[k]=Number(it[k])/priorPacking*Number(s.piecesPerBox||1);
+  if(Number(s.piecesPerBox)===1){setIncomingMode(it,'piece');}
   if(formType==='purchase'){ it.brand = s.brand||it.brand; if(!it.mrp) it.mrp = s.mrp||0; }
   else { if(!it.mrp) it.mrp = s.mrp||0; }
   render();
@@ -751,7 +754,7 @@ function renderPurchase(){
   const itemsHtml = purchaseDraft.items.map((it,idx)=>{
     const subs = (db.categories[it.category]&&db.categories[it.category].subs)||[];
     const mats = (db.categories[it.category]&&db.categories[it.category].materials)||[];
-    const amt = Number(it.qty)*Number(it.rate);
+    const amt = incomingAmount(it);
     const br = gstBreakdown(amt, Number(it.gst), purchaseDraft.gstMode);
     return `
     <div class="item-row-card">
@@ -785,16 +788,8 @@ function renderPurchase(){
       </div>
       <div class="row2">
         <div class="field"><label>Batch/Shade (optional)</label><input value="${escapeHtml(it.batch)}" oninput="updatePurchaseItem(${inlineValue(idx)},'batch',this.value);"/></div>
-        <div class="field"><label>Pieces per box</label><input type="number" value="${escapeHtml(it.piecesPerBox||'')}" placeholder="0" oninput="updatePurchaseItem(${inlineValue(idx)},'piecesPerBox',this.value)"/></div>
       </div>
-      <div class="row2">
-        <div class="field"><label>Purchase qty (boxes)</label><input type="number" value="${escapeHtml(it.qty||'')}" placeholder="0" oninput="updatePurchaseItem(${inlineValue(idx)},'qty',this.value)"/></div>
-        <div class="field"><label>Free qty (boxes)</label><input type="number" value="${escapeHtml(it.freeQty||'')}" placeholder="0" oninput="updatePurchaseItem(${inlineValue(idx)},'freeQty',this.value)"/></div>
-      </div>
-      <div class="row2">
-        <div class="field"><label>Rate per box</label><input type="number" value="${escapeHtml(it.rate||'')}" placeholder="0" oninput="updatePurchaseItem(${inlineValue(idx)},'rate',this.value)"/></div>
-        <div class="field"><label>MRP per box</label><input type="number" value="${escapeHtml(it.mrp||'')}" placeholder="0" oninput="updatePurchaseItem(${inlineValue(idx)},'mrp',this.value)"/></div>
-      </div>
+      ${renderIncomingFields(it,idx,'purchase')}
       <div class="field"><label>GST % (tap a common rate, or type any)</label>
         <input type="number" value="${escapeHtml(it.gst)}" oninput="updatePurchaseItem(${inlineValue(idx)},'gst',this.value)"/>
         <div class="free-chip-row" style="margin-top:6px;">
@@ -802,12 +797,12 @@ function renderPurchase(){
         </div>
       </div>
       ${it.sku ? `<div class="sku-chip">SKU: ${escapeHtml(it.sku)}</div>` : ''}
-      <div style="margin-top:8px;font-size:12px;color:var(--ink-500);">Taxable ${escapeHtml(fmt(br.taxable))} • GST ${escapeHtml(fmt(br.gst))} • Line total <b style="color:var(--clay-900);">${escapeHtml(fmt(br.total))}</b></div>
+      <div data-incoming-line="${idx}" style="margin-top:8px;font-size:12px;color:var(--ink-500);">Taxable ${escapeHtml(fmt(br.taxable))} • GST ${escapeHtml(fmt(br.gst))} • Line total <b style="color:var(--clay-900);">${escapeHtml(fmt(br.total))}</b></div>
     </div>`;
   }).join('');
 
-  const totalTaxable = purchaseDraft.items.reduce((a,it)=>{ const amt=Number(it.qty)*Number(it.rate); return a+gstBreakdown(amt,Number(it.gst),purchaseDraft.gstMode).taxable; },0);
-  const totalGst = purchaseDraft.items.reduce((a,it)=>{ const amt=Number(it.qty)*Number(it.rate); return a+gstBreakdown(amt,Number(it.gst),purchaseDraft.gstMode).gst; },0);
+  const totalTaxable = purchaseDraft.items.reduce((a,it)=>{ const amt=incomingAmount(it); return a+gstBreakdown(amt,Number(it.gst),purchaseDraft.gstMode).taxable; },0);
+  const totalGst = purchaseDraft.items.reduce((a,it)=>{ const amt=incomingAmount(it); return a+gstBreakdown(amt,Number(it.gst),purchaseDraft.gstMode).gst; },0);
 
   return modeSwitcher + `
     <div class="card">
@@ -865,16 +860,16 @@ function renderPurchase(){
     ${purchaseDraft.items.length ? `
     <div class="card">
       <h3>Bill summary</h3>
-      <div class="total-line"><span>Taxable value</span><span>${escapeHtml(fmt(totalTaxable))}</span></div>
-      <div class="total-line"><span>GST</span><span>${escapeHtml(fmt(totalGst))}</span></div>
+      <div class="total-line"><span>Taxable value</span><span data-incoming-total="taxable">${escapeHtml(fmt(totalTaxable))}</span></div>
+      <div class="total-line"><span>GST</span><span data-incoming-total="gst">${escapeHtml(fmt(totalGst))}</span></div>
       <div class="total-line"><span>Additional charges</span><span>${escapeHtml(fmt((purchaseDraft.additionalCharges||[]).reduce((a,c)=>a+Number(c.amount||0),0)))}</span></div>
-      <div class="total-line grand"><span>Total</span><span>${escapeHtml(fmt(totalTaxable+totalGst+(purchaseDraft.additionalCharges||[]).reduce((a,c)=>a+Number(c.amount||0),0)))}</span></div>
+      <div class="total-line grand"><span>Total</span><span data-incoming-total="grand">${escapeHtml(fmt(totalTaxable+totalGst+(purchaseDraft.additionalCharges||[]).reduce((a,c)=>a+Number(c.amount||0),0)))}</span></div>
     </div>` : ''}
     <button class="btn btn-primary" onclick="savePurchase()">Confirm & save purchase</button>
   `;
 }
 function addPurchaseItem(){
-  purchaseDraft.items.push({itemName:'',category:'',subcategory:'',material:'',size:'',brand:'',batch:'',piecesPerBox:0,qty:0,freeQty:0,rate:0,mrp:0,gst:18,sku:''});
+  purchaseDraft.items.push({itemName:'',category:'',subcategory:'',material:'',size:'',brand:'',batch:'',piecesPerBox:0,entryUnit:'box',qty:0,pieceQty:0,freeQty:0,freePieceQty:0,rate:0,mrp:0,gst:18,sku:''});
   render();
 }
 function removePurchaseItem(idx){ purchaseDraft.items.splice(idx,1); render(); }
@@ -882,6 +877,7 @@ function updatePurchaseItem(idx,field,val){
   const strFields = ['itemName','category','subcategory','material','size','brand','batch'];
   purchaseDraft.items[idx][field] = strFields.includes(field) ? val : Number(val);
   if(field==='itemName' && purchaseDraft.items[idx].sku) purchaseDraft.items[idx].sku = '';
+  refreshIncomingSummary('purchase');
 }
 
 
@@ -889,26 +885,26 @@ function updatePurchaseItem(idx,field,val){
 let purchaseReturnDraft = { gstMode:'excluded', partyId:null, items:[] };
 function renderPurchaseReturn(){
   const itemsHtml = purchaseReturnDraft.items.map((it,idx)=>{
-    const amt = Number(it.qty)*Number(it.rate);
+    const amt = incomingAmount(it);
     const br = gstBreakdown(amt, Number(it.gst), purchaseReturnDraft.gstMode);
     return `
     <div class="item-row-card">
       <button class="rm" onclick="removePurchaseReturnItem(${inlineValue(idx)})">×</button>
       <div class="li-main">${escapeHtml(it.itemName)} <span style="color:var(--ink-500);font-weight:500;">(${escapeHtml(it.batch||'—')})</span></div>
-      <div class="step">In stock: ${escapeHtml(it.availableBoxes)} boxes</div>
+      <div class="step">In stock: ${escapeHtml(stockQuantityLabel({qty:it.availablePieces ?? it.availableBoxes*it.piecesPerBox,piecesPerBox:it.piecesPerBox}))}</div>
+      ${renderIncomingFields(it,idx,'return')}
       <div class="row2" style="margin-top:6px;">
-        <div class="field"><label>Return qty (boxes)</label><input type="number" value="${escapeHtml(it.qty||'')}" placeholder="0" onchange="updatePurchaseReturnItem(${inlineValue(idx)},'qty',this.value)"/></div>
         <div class="field"><label>Reason</label>
           <select onchange="updatePurchaseReturnItem(${inlineValue(idx)},'reason',this.value)">
             ${['Damaged','Wrong item supplied','Excess stock','Shade mismatch','Other'].map(r=>`<option ${escapeHtml(it.reason===r?'selected':'')}>${escapeHtml(r)}</option>`).join('')}
           </select>
         </div>
       </div>
-      <div style="font-size:12px;color:var(--ink-500);">Line total <b style="color:var(--clay-900);">${escapeHtml(fmt(br.total))}</b></div>
+      <div data-incoming-line="${idx}" style="font-size:12px;color:var(--ink-500);">Line total <b style="color:var(--clay-900);">${escapeHtml(fmt(br.total))}</b></div>
     </div>`;
   }).join('');
-  const totalTaxable = purchaseReturnDraft.items.reduce((a,it)=>{ const amt=Number(it.qty)*Number(it.rate); return a+gstBreakdown(amt,Number(it.gst),purchaseReturnDraft.gstMode).taxable; },0);
-  const totalGst = purchaseReturnDraft.items.reduce((a,it)=>{ const amt=Number(it.qty)*Number(it.rate); return a+gstBreakdown(amt,Number(it.gst),purchaseReturnDraft.gstMode).gst; },0);
+  const totalTaxable = purchaseReturnDraft.items.reduce((a,it)=>{ const amt=incomingAmount(it); return a+gstBreakdown(amt,Number(it.gst),purchaseReturnDraft.gstMode).taxable; },0);
+  const totalGst = purchaseReturnDraft.items.reduce((a,it)=>{ const amt=incomingAmount(it); return a+gstBreakdown(amt,Number(it.gst),purchaseReturnDraft.gstMode).gst; },0);
 
   const supplierOptions = db.parties.filter(p=>p.type==='supplier');
   return `
@@ -941,9 +937,9 @@ function renderPurchaseReturn(){
     ${purchaseReturnDraft.items.length ? `
     <div class="card">
       <h3>Return summary</h3>
-      <div class="total-line"><span>Taxable value</span><span>${escapeHtml(fmt(totalTaxable))}</span></div>
-      <div class="total-line"><span>GST</span><span>${escapeHtml(fmt(totalGst))}</span></div>
-      <div class="total-line grand"><span>Total credit expected</span><span>${escapeHtml(fmt(totalTaxable+totalGst))}</span></div>
+      <div class="total-line"><span>Taxable value</span><span data-incoming-total="taxable">${escapeHtml(fmt(totalTaxable))}</span></div>
+      <div class="total-line"><span>GST</span><span data-incoming-total="gst">${escapeHtml(fmt(totalGst))}</span></div>
+      <div class="total-line grand"><span>Total credit expected</span><span data-incoming-total="grand">${escapeHtml(fmt(totalTaxable+totalGst))}</span></div>
     </div>
     <button class="btn btn-primary" onclick="savePurchaseReturn()">Confirm & save return</button>
     ` : ''}
@@ -957,7 +953,7 @@ function renderPReturnSearchResults(q){
   if(!matches.length){ box.innerHTML = `<div class="empty" style="padding:14px;">No matching stock found.</div>`; return; }
   box.innerHTML = matches.map(s=>`
     <div class="list-row" style="cursor:pointer;" onclick="pickStockForPReturn('${inlineValue(s.id)}')">
-      <div><div class="li-main">${escapeHtml(s.itemName)}</div><div class="li-sub">${escapeHtml(s.batch||'—')} • ${escapeHtml(Math.floor(s.qty/(s.piecesPerBox||1)))} boxes left • ${escapeHtml(s.sku)}</div></div>
+      <div><div class="li-main">${escapeHtml(s.itemName)}</div><div class="li-sub">${escapeHtml(s.batch||'—')} • ${escapeHtml(stockQuantityLabel(s))} left • ${escapeHtml(s.sku)}</div></div>
       <div class="li-right" style="color:var(--clay-700);">Add +</div>
     </div>
   `).join('');
@@ -967,7 +963,7 @@ function pickStockForPReturn(stockId){
   if(!s) return;
   if(purchaseReturnDraft.items.find(it=>it.stockId===stockId)){ return; }
   purchaseReturnDraft.items.push({stockId:s.id, itemName:s.itemName, batch:s.batch, piecesPerBox:s.piecesPerBox,
-    availableBoxes: Math.floor(s.qty/(s.piecesPerBox||1)), qty:0, rate:s.purchaseRate, gst:s.gst, reason:'Damaged'});
+    availablePieces:s.qty, availableBoxes: Math.floor(s.qty/(s.piecesPerBox||1)), entryUnit:s.piecesPerBox===1?'piece':'box', qty:0, pieceQty:0, rate:s.purchaseRate, gst:s.gst, reason:'Damaged'});
   document.getElementById('pReturnSearch').value='';
   render();
 }
@@ -1025,24 +1021,17 @@ function renderOpeningStock(){
         <div class="field"><label>Size</label><input value="${escapeHtml(it.size)}" oninput="updateOpeningStockItem(${inlineValue(idx)},'size',this.value)"/></div>
         <div class="field"><label>Batch/Shade (optional)</label><input value="${escapeHtml(it.batch)}" oninput="updateOpeningStockItem(${inlineValue(idx)},'batch',this.value);"/></div>
       </div>
-      <div class="row2">
-        <div class="field"><label>Pieces per box</label><input type="number" value="${escapeHtml(it.piecesPerBox||'')}" placeholder="0" oninput="updateOpeningStockItem(${inlineValue(idx)},'piecesPerBox',this.value)"/></div>
-        <div class="field"><label>Opening qty (boxes)</label><input type="number" value="${escapeHtml(it.qty||'')}" placeholder="0" oninput="updateOpeningStockItem(${inlineValue(idx)},'qty',this.value)"/></div>
-      </div>
-      <div class="row2">
-        <div class="field"><label>Cost per box (incl. GST)</label><input type="number" value="${escapeHtml(it.cost||'')}" placeholder="0" oninput="updateOpeningStockItem(${inlineValue(idx)},'cost',this.value)"/></div>
-        <div class="field"><label>MRP per box (incl. GST)</label><input type="number" value="${escapeHtml(it.mrp||'')}" placeholder="0" oninput="updateOpeningStockItem(${inlineValue(idx)},'mrp',this.value)"/></div>
-      </div>
+      ${renderIncomingFields(it,idx,'opening')}
       <div class="field"><label>GST % (tap a common rate, or type any)</label>
         <input type="number" value="${escapeHtml(it.gst)}" oninput="updateOpeningStockItem(${inlineValue(idx)},'gst',this.value)"/>
         <div class="free-chip-row" style="margin-top:6px;">
           ${[0,5,12,18,28].map(g=>`<span class="chip" onclick="updateOpeningStockItem(${inlineValue(idx)},'gst','${inlineValue(g)}');render()">${escapeHtml(g)}%</span>`).join('')}
         </div>
       </div>
-      <div class="step">Opening value (incl. GST): <b>${escapeHtml(fmt(Number(it.qty||0)*Number(it.cost||0)))}</b></div>
+      <div class="step">Opening value (incl. GST): <b data-incoming-line="${idx}">${escapeHtml(fmt(incomingAmount(it,'cost')))}</b></div>
     </div>`;
   }).join('');
-  const total = openingStockDraft.items.reduce((a,it)=>a+Number(it.qty||0)*Number(it.cost||0),0);
+  const total = openingStockDraft.items.reduce((a,it)=>a+incomingAmount(it,'cost'),0);
   return `
     <div class="card">
       <h3>Bulk import (100+ products)</h3>
@@ -1055,6 +1044,7 @@ function renderOpeningStock(){
     </div>
     <div class="card">
       <h3>Add opening stock</h3>
+      <button class="btn btn-ghost" onclick="setScreen('openingStockHistory')">Opening stock history / Edit</button>
       <div class="step">For stock you already have but never entered a purchase bill for. This won't show up in Purchase Reports or affect GST/ITC — it just sets accurate quantity and cost so P&amp;L works correctly from today onward.</div>
       ${itemsHtml || `<div class="empty">No items added yet.</div>`}
       <button class="btn btn-ghost" onclick="addOpeningStockItem()">+ Add item row</button>
@@ -1062,14 +1052,14 @@ function renderOpeningStock(){
     ${openingStockDraft.items.length ? `
     <div class="card">
       <h3>Total opening value</h3>
-      <div class="total-line grand"><span>Total</span><span>${escapeHtml(fmt(total))}</span></div>
+      <div class="total-line grand"><span>Total</span><span data-incoming-total="opening">${escapeHtml(fmt(total))}</span></div>
     </div>
     <button class="btn btn-primary" onclick="saveOpeningStock()">Save opening stock</button>
     ` : ''}
   `;
 }
 function addOpeningStockItem(){
-  openingStockDraft.items.push({itemName:'',category:'',subcategory:'',material:'',size:'',batch:'',piecesPerBox:0,qty:0,cost:0,mrp:0,gst:18});
+  openingStockDraft.items.push({itemName:'',category:'',subcategory:'',material:'',size:'',batch:'',piecesPerBox:0,entryUnit:'box',qty:0,pieceQty:0,cost:0,mrp:0,gst:18});
   render();
 }
 function removeOpeningStockItem(idx){ openingStockDraft.items.splice(idx,1); render(); }
@@ -1077,6 +1067,7 @@ function updateOpeningStockItem(idx,field,val){
   const strFields = ['itemName','category','subcategory','material','size','batch'];
   openingStockDraft.items[idx][field] = strFields.includes(field) ? val : Number(val);
   if(field==='itemName' && openingStockDraft.items[idx].sku) openingStockDraft.items[idx].sku = '';
+  refreshIncomingSummary('opening');
 }
 
 
@@ -1122,10 +1113,10 @@ function parseCsv(text){
   return rows;
 }
 function downloadOpeningStockTemplate(){
-  const headers = ['Item Name','Category','Subcategory','Material','Size','Batch','Pieces Per Box','Opening Qty (Boxes)','Cost Per Box (Incl GST)','MRP Per Box (Incl GST)','GST %'];
+  const headers = ['Item Name','Category','Subcategory','Material','Size','Batch','Pieces Per Box','Quantity (selected unit; boxes for mixed)','Cost Per Selected Unit (Incl GST)','MRP Per Selected Unit (Incl GST)','GST %','Entry Unit (box/piece/mixed)','Loose Pieces'];
   const sample = [
-    ['Glossy Wall Tile 12x18','Tiles','Wall Tiles','Porcelain','12x18 inch','','8','20','944','1180','18'],
-    ['Commode Wall Hung','Sanitaryware','Commodes','','','','1','10','3540','4720','18']
+    ['Glossy Wall Tile 12x18','Tiles','Wall Tiles','Porcelain','12x18 inch','','8','20','944','1180','18','box','0'],
+    ['Commode Wall Hung','Sanitaryware','Commodes','','','','1','10','3540','4720','18','piece','0']
   ];
   const rows = [headers].concat(sample);
   const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
@@ -1416,7 +1407,7 @@ function renderStock(){
     return `
     <div class="list-row" style="cursor:pointer;" onclick="openStockDetail('${inlineValue(s.id)}')">
       <div><div class="li-main">${escapeHtml(s.itemName)}</div><div class="li-sub">${escapeHtml(s.category)} › ${escapeHtml(s.subcategory)||'—'} • ${escapeHtml(s.sku)}</div>${tag}</div>
-      <div class="li-right">${escapeHtml(boxes)} box${loose?` +${escapeHtml(loose)}pc`:''}</div>
+      <div class="li-right">${escapeHtml(stockQuantityLabel(s))}</div>
     </div>`;
   }).join('');
   return `
@@ -1465,16 +1456,19 @@ async function restoreOrphan(idx){
 }
 window.restoreOrphan = restoreOrphan;
 function renderOpeningStockHistory(){
-  const entries = (db.openingStock||[]).slice().sort((a,b)=> (a.date<b.date?1:-1));
+  scheduleOpeningNumbering();
+  const entries = (db.openingStock||[]).slice().sort(compareOpeningNumbers);
   return `
     <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('stock')">← Back to Stock</button>
     <div class="card">
       <h3>Opening stock entries (${escapeHtml(entries.length)})</h3>
+      ${openingNumberingNotice()}
       <div class="step">Every opening-stock entry you've saved, with the items recorded in each. Use this to confirm exactly what went in.</div>
       ${entries.length ? entries.map(o=>`
         <div style="border-bottom:1px solid var(--line);padding:12px 0;">
           <div class="li-main">${escapeHtml(o.openingNo||'(no number)')} — ${escapeHtml(o.date||'')} — ${escapeHtml((o.items||[]).length)} item(s)</div>
-          ${(o.items||[]).map(it=>`<div class="li-sub">• ${escapeHtml(it.itemName)}${escapeHtml(it.batch?' ('+it.batch+')':'')} — ${escapeHtml(it.qty)} box(es) @ ${escapeHtml(fmt(it.cost))}</div>`).join('')}
+          <button class="btn btn-ghost btn-sm" onclick="openOpeningStockDetail('${inlineValue(o.id)}')">${isOwner()?'View / Edit':'View'}</button>
+          ${(o.items||[]).map(it=>`<div class="li-sub">• ${escapeHtml(it.itemName)}${escapeHtml(it.batch?' ('+it.batch+')':'')} — ${escapeHtml(incomingQuantityLabel(it))} · ${escapeHtml(incomingRateLabel(it,'cost'))}</div>`).join('')}
         </div>
       `).join('') : `<div class="empty">No opening stock entries recorded.</div>`}
     </div>`;
@@ -1487,16 +1481,13 @@ window.updateOpeningDetailItem = updateOpeningDetailItem;
 function renderOpeningStockDetail(){
   if(!isOwner())return renderReadOnlyOpening();
   const o = (db.openingStock||[]).find(x=>x.id===openingDetailCtx?.id);
-  if(!o) return `<div class="empty">Not found.</div><button class="btn btn-ghost" onclick="setScreen('fullLedger')">← Back</button>`;
-  const rows = (openingDetailCtx.draftItems||o.items||[]).map((it,idx)=>`
-    <div class="item-row-card">
-      <div class="li-main">${escapeHtml(it.itemName)}${escapeHtml(it.batch?' • '+it.batch:'')}</div>
-      <div class="li-sub">${escapeHtml(it.category||'')} ${escapeHtml(it.subcategory?'› '+it.subcategory:'')} • ${escapeHtml(it.piecesPerBox||1)} pcs/box</div>
-      <div class="row2">
-        <div class="field"><label>Quantity (boxes)</label><input type="number" value="${escapeHtml(it.qty)}" oninput="updateOpeningDetailItem(${inlineValue(idx)},'qty',this.value)"/></div>
-        <div class="field"><label>Cost per box</label><input type="number" value="${escapeHtml(it.cost)}" oninput="updateOpeningDetailItem(${inlineValue(idx)},'cost',this.value)"/></div>
-      </div>
-    </div>`).join('');
+  if(!o) return `<div class="empty">Not found.</div>`;
+  const rows = (openingDetailCtx.draftItems||o.items||[]).map((it,idx)=>{
+    const reason=openingEditLock(it), stock=stockById(it.sku);
+    return `<div class="item-row-card"><div class="li-main">${escapeHtml(it.itemName)}${escapeHtml(it.batch?' • '+it.batch:'')}</div>
+    ${reason?`<div class="step">${escapeHtml(reason)}</div>${stock?`<button class="btn btn-ghost" onclick="openStockDetail('${inlineValue(stock.id)}')">Review stock / Record quantity correction</button>`:''}`:''}
+    <fieldset ${reason?'disabled':''} style="border:0;padding:0;margin:0;min-width:0">${renderIncomingFields(it,idx,'openingEdit')}</fieldset></div>`;
+  }).join('');
   return `
     <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('fullLedger')">← Back to Ledger</button>
     <div class="card">
@@ -1508,7 +1499,7 @@ function renderOpeningStockDetail(){
       <h3>Items</h3>
       ${rows || `<div class="empty">No items.</div>`}
     </div>
-    <button class="btn btn-primary" onclick="saveOpeningStockEdits()">Save changes</button>`;
+    <button class="btn btn-primary" ${o.items.every(it=>openingEditLock(it))?'disabled':''} onclick="saveOpeningStockEdits()">Save changes</button>`;
 }
 
 window.saveOpeningStockEdits = saveOpeningStockEdits;
@@ -1630,7 +1621,7 @@ function renderFullLedger(){
       <div class="card">
         <h3>Opening stock (${escapeHtml(opening.length)})</h3>
         ${opening.length ? opening.sort((a,b)=>a.date<b.date?1:-1).map(o=>{
-          const value = (o.items||[]).reduce((a,it)=> a + (Number(it.qty)||0)*(Number(it.cost)||0), 0);
+          const value = (o.items||[]).reduce((a,it)=> a + incomingAmount(it,'cost'), 0);
           return `
           <div class="list-row" style="cursor:pointer;" onclick="openOpeningStockDetail('${inlineValue(o.id)}')">
             <div><div class="li-main">${escapeHtml(o.openingNo||'(no number)')}</div><div class="li-sub">${escapeHtml(o.date||'')} • ${escapeHtml((o.items||[]).length)} item(s)</div></div>
@@ -1738,7 +1729,7 @@ function renderFindDuplicates(){
       if(!key.trim()||key==='|') return;
       if(!entered[key]) entered[key] = {detail:it, itemName:it.itemName, batch:it.batch, qty:0, sources:[]};
       entered[key].detail = it;
-      entered[key].qty += ((Number(it.qty)||0) + (Number(it.freeQty)||0)) * (Number(it.piecesPerBox)||1);
+      entered[key].qty += units(it,'purchase');
       entered[key].sources.push('Purchase '+(p.billNo||p.id)+' ('+(p.date||'')+')');
     });
   });
@@ -1748,7 +1739,7 @@ function renderFindDuplicates(){
       if(!key.trim()||key==='|') return;
       if(!entered[key]) entered[key] = {detail:it, itemName:it.itemName, batch:it.batch, qty:0, sources:[]};
       entered[key].detail = it;
-      entered[key].qty += (Number(it.qty)||0) * (Number(it.piecesPerBox)||1);
+      entered[key].qty += units(it,'purchase');
       entered[key].sources.push('Opening stock ('+(o.date||'')+')');
     });
   });
@@ -1839,7 +1830,7 @@ function renderStockDetail(){
   const saleHistory = db.sales.filter(sale=>sale.items.some(it=>it.stockId===s.id)).map(sale=>({type:'sale', id:sale.id, billNo:sale.billNo, date:sale.date, who:sale.customer}));
   const openingHistory = db.openingStock.filter(o=>o.items.some(it=>it.sku===s.sku)).map(o=>{
     const line = o.items.find(it=>it.sku===s.sku);
-    return {type:'opening', id:o.id, billNo:'Opening Stock', date:o.date, who:`${line.qty} boxes @ ${fmt(line.cost)}/box`};
+    return {type:'opening', id:o.id, billNo:o.openingNo||'Opening Stock', date:o.date, who:`${incomingQuantityLabel(line)} · ${incomingRateLabel(line,'cost')}`};
   });
   const history = purchaseHistory.concat(saleHistory).concat(openingHistory).sort((a,b)=> a.date<b.date?1:-1);
   const boxes = Math.floor(s.qty/(s.piecesPerBox||1));
@@ -1851,8 +1842,8 @@ function renderStockDetail(){
       <div class="step">${escapeHtml(s.category)} › ${escapeHtml(s.subcategory||'—')} ${escapeHtml(s.material?'• '+s.material:'')}</div>
       <div class="sku-chip">SKU: ${escapeHtml(s.sku)}</div>
       <div class="stat-grid" style="margin-top:10px;">
-        <div class="stat"><div class="num">${escapeHtml(boxes)}${loose?` +${escapeHtml(loose)}pc`:''}</div><div class="lbl">In stock</div></div>
-        <div class="stat"><div class="num">${escapeHtml(fmt(s.mrp))}</div><div class="lbl">MRP / box</div></div>
+        <div class="stat"><div class="num">${escapeHtml(stockQuantityLabel(s))}</div><div class="lbl">In stock</div></div>
+        <div class="stat"><div class="num">${escapeHtml(fmt(s.mrp))}</div><div class="lbl">MRP / ${Number(s.piecesPerBox)===1?'piece':'box'}</div></div>
       </div>
     </div>
     ${isOwner() ? `
@@ -1973,16 +1964,8 @@ function renderBillDetail(){
         <div class="field"><label>Product name</label><input value="${escapeHtml(it.itemName)}" oninput="updateBillItem(${inlineValue(idx)},'itemName',this.value)"/></div>
         <div class="row2">
           <div class="field"><label>Batch/Shade</label><input value="${escapeHtml(it.batch||'')}" oninput="updateBillItem(${inlineValue(idx)},'batch',this.value)"/></div>
-          <div class="field"><label>Pieces/box</label><input type="number" value="${escapeHtml(it.piecesPerBox||'')}" readonly title="Box size is fixed on a saved bill"/></div>
         </div>
-        <div class="row2">
-          <div class="field"><label>Qty (boxes)</label><input type="number" value="${escapeHtml(it.qty||'')}" oninput="updateBillItem(${inlineValue(idx)},'qty',this.value)"/></div>
-          <div class="field"><label>Free qty</label><input type="number" value="${escapeHtml(it.freeQty||'')}" oninput="updateBillItem(${inlineValue(idx)},'freeQty',this.value)"/></div>
-        </div>
-        <div class="row2">
-          <div class="field"><label>Rate/box</label><input type="number" value="${escapeHtml(it.rate||'')}" oninput="updateBillItem(${inlineValue(idx)},'rate',this.value)"/></div>
-          <div class="field"><label>MRP/box</label><input type="number" value="${escapeHtml(it.mrp||'')}" oninput="updateBillItem(${inlineValue(idx)},'mrp',this.value)"/></div>
-        </div>
+        ${renderIncomingFields(it,idx,'purchaseEdit')}
       </div>`;
     } else {
       return `
@@ -3308,7 +3291,7 @@ function renderQuoteForm(){
         <div class="field"><label>Loose pieces</label><input type="number" value="${escapeHtml(it.pieceQty||'')}" placeholder="0" onchange="updateQuoteItem(${inlineValue(idx)},'pieceQty',this.value)"/></div>
       </div>
       <div class="field"><label>Extra discount % (optional)</label><input type="number" value="${escapeHtml(it.discount||'')}" placeholder="0" onchange="updateQuoteItem(${inlineValue(idx)},'discount',this.value)"/></div>
-      <div style="font-size:12px;color:var(--ink-500);">Line total <b>${escapeHtml(fmt(gross-disc))}</b></div>
+      <div data-incoming-line="${idx}" style="font-size:12px;color:var(--ink-500);">Line total <b>${escapeHtml(fmt(gross-disc))}</b></div>
     </div>`;
   }).join('');
   const total = quoteDraft.items.reduce((a,it)=>{
@@ -3687,9 +3670,9 @@ function renderPrintPreview(){
   const items = record.items||[];
   const rows = items.map(it=>{
     if(isPurchaseSide){
-      const qty = it.qty||0, rate=it.rate||0, gst=it.gst||0;
-      const amt = qty*rate;
-      return `<tr><td>${escapeHtml(it.itemName)}${it.batch?` (${escapeHtml(it.batch)})`:''}</td><td class="num">${escapeHtml(qty)} box</td><td class="num">${escapeHtml(fmt(rate))}</td><td class="num">${escapeHtml(gst)}%</td><td class="num">${escapeHtml(fmt(amt))}</td></tr>`;
+      const gst=it.gst||0;
+      const amt = incomingAmount(it);
+      return `<tr><td>${escapeHtml(it.itemName)}${it.batch?` (${escapeHtml(it.batch)})`:''}</td><td class="num">${escapeHtml(incomingQuantityLabel(it))}</td><td class="num">${escapeHtml(incomingRateLabel(it))}</td><td class="num">${escapeHtml(gst)}%</td><td class="num">${escapeHtml(fmt(amt))}</td></tr>`;
     } else {
       const boxQty=it.boxQty||0, pieceQty=it.pieceQty||0, boxPrice=it.boxPrice||0, piecePrice=it.piecePrice||0, gst=it.gst||0;
       const raw = boxQty*boxPrice + pieceQty*piecePrice;
@@ -3813,7 +3796,7 @@ document.addEventListener('keydown', function(e){
 });
 
 /* HAMMAD WORLD reliability revision 2026-09-18. Financial amounts are INR. */
-const HW_VERSION='2026.09.21-r10-catalog-refresh';
+const HW_VERSION='2026.09.22-r11-pieces-opening';
 let hwExpectedLocal=localStorage.getItem(DB_KEY), hwCloudReady=false, hwCloudError='', hwBusy=new Set(), hwPendingOpenings=[];
 const hwCollections=['stock','sales','purchases','saleReturns','purchaseReturns','openingStock','parties','payments','expenses','staff','staffLedger','quotations','auditLog'];
 // Staff subscribe to the shop records needed to verify deliveries and enter bills.
@@ -3831,7 +3814,7 @@ function stockChanges(needs,sign){return Object.fromEntries(Object.entries(needs
 function clone(v){return JSON.parse(JSON.stringify(v));}
 function amount(v){const n=Number(v);if(!Number.isFinite(n))throw Error('Enter a finite amount.');return Math.round((n+Number.EPSILON)*100)/100;}
 function numeric(v,label,min=0,max=Number.MAX_SAFE_INTEGER){const n=Number(v??0);if(!Number.isFinite(n)||n<min||n>max)throw Error(label+' must be between '+min+' and '+max+'.');return n;}
-function units(it,kind='sale'){const p=numeric(it.piecesPerBox,'Pieces per box',1);const q=kind==='sale'?numeric(it.boxQty||0,'Boxes')*p+numeric(it.pieceQty||0,'Pieces'):(numeric(it.qty,'Quantity')+numeric(it.freeQty||0,'Free quantity'))*p;if(!Number.isSafeInteger(q)||!Number.isSafeInteger(p))throw Error('Quantities must resolve to a whole number of pieces.');return q;}
+function units(it,kind='sale'){for(const key of ['pieceQty','freePieceQty'])if(it[key]!=null&&!Number.isSafeInteger(numeric(it[key],key==='pieceQty'?'Pieces':'Free pieces')))throw Error('Pieces must be whole numbers.');const p=numeric(it.piecesPerBox,'Pieces per box',1);const q=kind==='sale'?numeric(it.boxQty||0,'Boxes')*p+numeric(it.pieceQty||0,'Pieces'):(numeric(it.qty||0,'Boxes')+numeric(it.freeQty||0,'Free boxes'))*p+numeric(it.pieceQty||0,'Pieces')+numeric(it.freePieceQty||0,'Free pieces');if(!Number.isSafeInteger(q)||!Number.isSafeInteger(p))throw Error('Quantities must resolve to a whole number of pieces.');return q;}
 function uid(){return typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)+'-'+Math.random().toString(36).slice(2);}
 function dayAt(date=new Date()){return new Date(date.getTime()+19800000).toISOString().slice(0,10);}
 function todayStr(){return dayAt(new Date());}
@@ -3847,12 +3830,12 @@ async function guarded(key,fn){if(hwBusy.has(key))return;if(hwBusy.size&&key!=='
 function validateCommonDraft(d){numeric(d.billDiscount||0,'Bill discount',0,100);numeric(d.amountPaid||0,'Amount paid');if(d.actualAmountPaid!==''&&d.actualAmountPaid!=null)numeric(d.actualAmountPaid,'Actual amount paid');for(const c of d.additionalCharges||[])numeric(c.amount,'Additional charge');if(d.partyId&&!db.parties.some(p=>p.id===d.partyId))throw Error('Select an existing party.');}
 function checkSale(items){if(!Array.isArray(items)||!items.length)throw Error('Add at least one item.');const ids=new Set();for(const it of items){safeId(it.stockId);if(!units(it))throw Error('Every sale line needs a positive quantity.');numeric(it.boxPrice,'Box price');numeric(it.piecePrice,'Piece price');numeric(it.discount||0,'Line discount',0,100);numeric(it.gst||0,'GST rate',0,100);if(it.lineId&&ids.has(it.lineId))throw Error('Duplicate sale line ID. Reopen this bill.');if(it.lineId)ids.add(it.lineId);}}
 function validateSaleRows(items){try{checkSale(items);validateCommonDraft(saleDraft);return true;}catch(e){alert(e.message);return false;}}
-function checkPurchase(items,opening=false){if(!Array.isArray(items)||!items.length)throw Error('Add at least one item.');for(const it of items){if(!String(it.itemName||'').trim()||!it.category)throw Error('Every item needs a name and category.');if(!units(it,'purchase')||numeric(it.qty,'Quantity')<=0)throw Error('Enter a positive quantity.');numeric(opening?it.cost:it.rate,opening?'Cost':'Rate',opening?0.01:0);numeric(it.mrp||0,'MRP');numeric(it.gst||0,'GST',0,100);}}
+function checkPurchase(items,opening=false){if(!Array.isArray(items)||!items.length)throw Error('Add at least one item.');for(const it of items){if(!String(it.itemName||'').trim()||!it.category)throw Error('Every item needs a name and category.');if(!units(it,'purchase')||incomingPaidUnits(it)<=0)throw Error('Enter a positive quantity.');numeric(opening?it.cost:it.rate,opening?'Cost':'Rate',opening?0.01:0);numeric(it.mrp||0,'MRP');numeric(it.gst||0,'GST',0,100);}}
 function validatePurchaseRows(items){try{checkPurchase(items);validateCommonDraft(purchaseDraft);return true;}catch(e){alert(e.message);return false;}}
 function validateOpeningStockRows(items){try{checkPurchase(items,true);return true;}catch(e){alert(e.message);return false;}}
 function aggregateSaleNeeds(items){const result=Object.create(null);for(const it of items)result[it.stockId]=(result[it.stockId]||0)+units(it);return result;}
 function saleTotals(items,d){let total=0,gst=0,discount=0;const keep=1-numeric(d.billDiscountPct??d.billDiscount??0,'Bill discount',0,100)/100;for(const it of items){const gross=Number(it.boxQty||0)*Number(it.boxPrice)+Number(it.pieceQty||0)*Number(it.piecePrice);const disc=gross*Number(it.discount||0)/100;const br=gstBreakdown((gross-disc)*keep,Number(it.gst||0),d.gstMode||'included');total+=br.total;gst+=br.gst;discount+=disc+(gross-disc)*(1-keep);}const charges=(d.additionalCharges||[]).reduce((n,c)=>n+numeric(c.amount,'Additional charge'),0);return {totalAmount:amount(total+charges),totalGst:amount(gst),totalDiscount:amount(discount),additionalChargesTotal:amount(charges),billDiscountPct:amount((1-keep)*100)};}
-function purchaseTotals(items,d){let taxable=0,gst=0;const lines=items.map(it=>{const br=gstBreakdown(Number(it.qty)*Number(it.rate),Number(it.gst||0),d.gstMode||'excluded');taxable+=br.taxable;gst+=br.gst;return br.taxable;});const charges=(d.additionalCharges||[]).reduce((n,c)=>n+numeric(c.amount,'Additional charge'),0);const actual=d.actualAmountPaidExplicit!==false&&d.actualAmountPaid!==''&&d.actualAmountPaid!=null?numeric(d.actualAmountPaid,'Actual amount paid'):taxable+gst+charges;const gap=Math.max(0,actual-taxable-gst-charges);const count=items.reduce((n,it)=>n+units(it,'purchase'),0);return {totalAmount:amount(taxable),totalGst:amount(gst),additionalChargesTotal:amount(charges),actualAmountPaid:amount(actual),landed:lines.map((n,i)=>n+(charges+gap)*(taxable>0?n/taxable:units(items[i],'purchase')/count))};}
+function purchaseTotals(items,d){let taxable=0,gst=0;const lines=items.map(it=>{const br=gstBreakdown(incomingAmount(it),Number(it.gst||0),d.gstMode||'excluded');taxable+=br.taxable;gst+=br.gst;return br.taxable;});const charges=(d.additionalCharges||[]).reduce((n,c)=>n+numeric(c.amount,'Additional charge'),0);const actual=d.actualAmountPaidExplicit!==false&&d.actualAmountPaid!==''&&d.actualAmountPaid!=null?numeric(d.actualAmountPaid,'Actual amount paid'):taxable+gst+charges;const gap=Math.max(0,actual-taxable-gst-charges);const count=items.reduce((n,it)=>n+units(it,'purchase'),0);return {totalAmount:amount(taxable),totalGst:amount(gst),additionalChargesTotal:amount(charges),actualAmountPaid:amount(actual),landed:lines.map((n,i)=>n+(charges+gap)*(taxable>0?n/taxable:units(items[i],'purchase')/count))};}
 function productMeta(it,id){return {sku:id,itemName:String(it.itemName).trim(),category:it.category,subcategory:it.subcategory||'',material:it.material||'',size:it.size||'',brand:it.brand||'',batch:it.batch||'',piecesPerBox:Number(it.piecesPerBox),purchaseRate:Number(it.rate??it.cost??0),mrp:Number(it.mrp)>0?Number(it.mrp):Number(it.rate??it.cost??0),gst:Number(it.gst)||0};}
 async function resolvePurchaseItems(items,cloud){const seen=new Map();for(const it of items){let s=it.sku?stockById(it.sku):findStockRow(it.itemName,it.batch);if(s?.mergedInto)s=stockById(s.id);const key=String(it.itemName).trim().toLowerCase()+'\u0000'+String(it.batch||'').trim().toLowerCase();it.sku=s?.id||seen.get(key)|| (cloud?await nextSkuCloud(it.category):nextSku(it.category));seen.set(key,it.sku);}}
 function groupedIncoming(items,landed){const g=Object.create(null);items.forEach((it,i)=>{const x=g[it.sku]||(g[it.sku]={qty:0,value:0,item:it});if(Number(x.item.piecesPerBox)!==Number(it.piecesPerBox))throw Error('One product cannot have different box sizes on the same entry.');x.qty+=units(it,'purchase');x.value+=landed[i];x.item=it;});return g;}
@@ -3903,18 +3886,21 @@ async function nextBillNoCloud(kind){
 async function nextSkuCloud(category){const prefix=(category||'GEN').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase()||'GEN',ref=fsDB.collection('meta').doc('skuCounter_'+prefix);return fsDB.runTransaction(async tx=>{const counter=await tx.get(ref);let n=(counter.exists?Number(counter.data().seq)||0:0)+1;for(;;n++){const candidate=prefix+'-'+String(n).padStart(5,'0'),s=await tx.get(fsDB.collection('stock').doc(candidate));if(!s.exists){tx.set(ref,{seq:n},{merge:true});return candidate;}}});}
 function pendingOpeningKey(){return 'hw_pending_opening_'+(getStoredConfig()?.projectId||'local')+'_'+(typeof currentUserEmail==='string'?currentUserEmail:'');}
 function hasPendingOpening(){return hwPendingOpenings.length>0||!!localStorage.getItem(pendingOpeningKey());}
-async function applyOpeningStockItemsCloud(items,opId){checkPurchase(items,true);let pending;try{pending=JSON.parse(localStorage.getItem(pendingOpeningKey())||'null');}catch{}const input=clone(items);input.forEach(it=>{delete it.sku;delete it.freeQty;});const inputKey=JSON.stringify(input);if(pending){if(opId&&pending.opId!==opId)throw Error('An opening-stock import is unfinished. Resume it before starting another.');if(inputKey!==pending.inputKey)throw Error('This unfinished import has already applied stock. Resume the unchanged import before editing or adding another.');opId=pending.opId;items=clone(pending.items);}else{if(hwPendingOpenings.length)throw Error('Resume the unfinished cloud import before starting another.');opId=opId||uid();items=clone(items);await resolvePurchaseItems(items,true);pending={opId,items:clone(items),inputKey};localStorage.setItem(pendingOpeningKey(),JSON.stringify(pending));}
- safeId(opId);const historyRef=fsDB.collection('openingStock').doc(opId),payload=JSON.stringify(items),landed=items.map(it=>gstBreakdown(Number(it.cost)*Number(it.qty),Number(it.gst)||0,'included').taxable),groups=groupedIncoming(items,landed),ids=Object.keys(groups),chunks=Math.ceil(ids.length/100);
- await fsDB.runTransaction(async tx=>{const snap=await tx.get(historyRef);if(snap.exists){if(snap.data().payload!==payload)throw Error('Import contents differ from the saved operation.');return;}tx.set(historyRef,{openingNo:opId,date:todayStr(),items,status:'pending',payload,chunks,createdAt:firebase.firestore.FieldValue.serverTimestamp(),rev:0});});
+async function applyOpeningStockItemsCloud(items,opId){checkPurchase(items,true);await ensureOpeningNumbers();let pending;try{pending=JSON.parse(localStorage.getItem(pendingOpeningKey())||'null');}catch{}const input=clone(items);input.forEach(it=>{delete it.sku;delete it.freeQty;});const inputKey=JSON.stringify(input);
+ if(!pending&&opId){safeId(opId);const prior=await fsDB.collection('openingStock').doc(opId).get({source:'server'});if(prior.exists){const rec={id:opId,...prior.data()},priorInput=clone(rec.items);priorInput.forEach(it=>{delete it.sku;delete it.freeQty;});if(JSON.stringify(priorInput)!==inputKey)throw Error('Import contents differ from the saved operation.');if(rec.status==='completed'){upsert('openingStock',rec);return rec.items;}pending={opId,items:clone(rec.items),inputKey};localStorage.setItem(pendingOpeningKey(),JSON.stringify(pending));}}
+ if(pending){if(opId&&pending.opId!==opId)throw Error('An opening-stock import is unfinished. Resume it before starting another.');if(inputKey!==pending.inputKey)throw Error('This unfinished import has already applied stock. Resume the unchanged import before editing or adding another.');opId=pending.opId;items=clone(pending.items);}else{if(hwPendingOpenings.length)throw Error('Resume the unfinished cloud import before starting another.');opId=opId||uid();items=clone(items);await resolvePurchaseItems(items,true);pending={opId,items:clone(items),inputKey};localStorage.setItem(pendingOpeningKey(),JSON.stringify(pending));}
+ safeId(opId);const historyRef=fsDB.collection('openingStock').doc(opId),payload=JSON.stringify(items),landed=items.map(it=>gstBreakdown(incomingAmount(it,'cost'),Number(it.gst)||0,'included').taxable),groups=groupedIncoming(items,landed),ids=Object.keys(groups),chunks=Math.ceil(ids.length/100);
+ let history;const counterRef=fsDB.collection('meta').doc('billCounter_opening');
+ await fsDB.runTransaction(async tx=>{const snap=await tx.get(historyRef);if(snap.exists){if(snap.data().payload!==payload)throw Error('Import contents differ from the saved operation.');history={id:opId,...snap.data()};return;}const counter=await tx.get(counterRef),n=nextOpeningSequence(counter.exists?counter.data().seq:0);history={id:opId,openingNo:formatBillNo('opening',n),openingSequence:n,date:todayStr(),items,status:'pending',payload,chunks,createdAt:firebase.firestore.FieldValue.serverTimestamp(),rev:0};tx.set(counterRef,{seq:n},{merge:true});tx.set(historyRef,history);});
  for(let c=0;c<chunks;c++){const part=ids.slice(c*100,(c+1)*100),marker=fsDB.collection('openingStockChunks').doc(opId+'-'+c);await fsDB.runTransaction(async tx=>{const done=await tx.get(marker),op=await tx.get(historyRef);if(!op.exists||op.data().payload!==payload)throw Error('Opening operation changed.');if(done.exists)return;const refs=part.map(id=>fsDB.collection('stock').doc(id)),snaps=await Promise.all(refs.map(r=>tx.get(r)));const values=part.map((id,i)=>incomingStock(snaps[i].exists?snaps[i].data():null,groups[id],id));values.forEach((value,i)=>tx.set(refs[i],value,{merge:true}));tx.set(marker,{opId,chunk:c,appliedAt:firebase.firestore.FieldValue.serverTimestamp()});});}
- await historyRef.update({status:'completed',completedAt:firebase.firestore.FieldValue.serverTimestamp()});localStorage.removeItem(pendingOpeningKey());hwPendingOpenings=hwPendingOpenings.filter(r=>r.id!==opId);upsert('openingStock',{id:opId,openingNo:opId,date:todayStr(),items,status:'completed',rev:0});syncCatalogItem();return items;}
+ await historyRef.update({status:'completed',completedAt:firebase.firestore.FieldValue.serverTimestamp()});localStorage.removeItem(pendingOpeningKey());hwPendingOpenings=hwPendingOpenings.filter(r=>r.id!==opId);upsert('openingStock',{...history,status:'completed'});syncCatalogItem();return items;}
 async function resumeOpeningImport(){return guarded('opening',async()=>{let p=JSON.parse(localStorage.getItem(pendingOpeningKey())||'null');if(!p&&hwPendingOpenings.length){const entry=hwPendingOpenings[0],items=clone(entry.items),input=clone(items);input.forEach(it=>{delete it.sku;delete it.freeQty;});p={opId:entry.id,items,inputKey:JSON.stringify(input)};localStorage.setItem(pendingOpeningKey(),JSON.stringify(p));}if(!p)throw Error('No unfinished import.');await applyOpeningStockItemsCloud(p.items,p.opId);openingStockDraft={items:[]};alert('Opening stock import completed.');setScreen('stock');});}
-function applyOpeningStockItemsLocal(items){checkPurchase(items,true);const used=new Map(),valid=clone(items);for(const it of valid){let s=it.sku?stockById(it.sku):findStockRow(it.itemName,it.batch);const key=it.itemName.trim().toLowerCase()+'\0'+String(it.batch||'').trim().toLowerCase();it.sku=s?.id||used.get(key)||nextSku(it.category);used.set(key,it.sku);}const groups=groupedIncoming(valid,valid.map(it=>gstBreakdown(Number(it.cost)*Number(it.qty),Number(it.gst)||0,'included').taxable));for(const [id,g]of Object.entries(groups)){const s=db.stock.find(s=>s.id===id),next=incomingStock(s,g,id);if(s)Object.assign(s,next);else db.stock.push({id,...next});}return valid;}
-async function saveOpeningStock(){return guarded('opening',async()=>{checkPurchase(openingStockDraft.items,true);if(CLOUD_MODE){await applyOpeningStockItemsCloud(openingStockDraft.items,openingStockDraft.opId);}else localCommit(state=>{const items=applyOpeningStockItemsLocal(openingStockDraft.items);state.openingStock.push({id:nextId('OPS'),openingNo:nextBillNo('opening'),date:todayStr(),items,rev:0,status:'completed'});auditIn(state,'Opening stock added',items.length+' lines');});openingStockDraft={items:[]};alert('Opening stock saved.');setScreen('stock');});}
+function applyOpeningStockItemsLocal(items){checkPurchase(items,true);const used=new Map(),valid=clone(items);for(const it of valid){let s=it.sku?stockById(it.sku):findStockRow(it.itemName,it.batch);const key=it.itemName.trim().toLowerCase()+'\0'+String(it.batch||'').trim().toLowerCase();it.sku=s?.id||used.get(key)||nextSku(it.category);used.set(key,it.sku);}const groups=groupedIncoming(valid,valid.map(it=>gstBreakdown(incomingAmount(it,'cost'),Number(it.gst)||0,'included').taxable));for(const [id,g]of Object.entries(groups)){const s=db.stock.find(s=>s.id===id),next=incomingStock(s,g,id);if(s)Object.assign(s,next);else db.stock.push({id,...next});}return valid;}
+async function saveOpeningStock(){return guarded('opening',async()=>{checkPurchase(openingStockDraft.items,true);await ensureOpeningNumbers();if(CLOUD_MODE){await applyOpeningStockItemsCloud(openingStockDraft.items,openingStockDraft.opId);}else localCommit(state=>{const items=applyOpeningStockItemsLocal(openingStockDraft.items);state.openingStock.push({id:nextId('OPS'),openingNo:nextBillNo('opening'),date:todayStr(),items,rev:0,status:'completed'});auditIn(state,'Opening stock added',items.length+' lines');});openingStockDraft={items:[]};alert('Opening stock saved.');setScreen('stock');});}
 async function saveOpeningStockCloud(){return saveOpeningStock();}
-function importOpeningStockCsv(file){if(!file)return;const reader=new FileReader();reader.onload=()=>guarded('opening',async()=>{const rows=parseCsv(reader.result);if(rows.length<2)throw Error('The CSV needs a header and item rows.');const items=rows.slice(1).filter(r=>r.some(v=>String(v).trim())).map((r,i)=>{if(r.length<9)throw Error('CSV row '+(i+2)+' is incomplete. Nothing was imported.');return {itemName:r[0].trim(),category:r[1].trim(),subcategory:(r[2]||'').trim(),material:(r[3]||'').trim(),size:(r[4]||'').trim(),batch:(r[5]||'').trim(),piecesPerBox:Number(r[6]),qty:Number(r[7]),cost:Number(r[8]),mrp:Number(r[9]||r[8]),gst:Number(r[10]||0)};});checkPurchase(items,true);if(!confirm('Import all '+items.length+' rows as opening stock?'))return;if(CLOUD_MODE)await applyOpeningStockItemsCloud(items);else localCommit(state=>{const valid=applyOpeningStockItemsLocal(items);state.openingStock.push({id:nextId('OPS'),openingNo:nextBillNo('opening'),date:todayStr(),items:valid,status:'completed',rev:0});auditIn(state,'Opening CSV imported',items.length+' lines');});alert('All '+items.length+' rows imported.');setScreen('stock');});reader.onerror=()=>alert('Could not read the CSV.');reader.readAsText(file);}
+function importOpeningStockCsv(file){if(!file)return;const reader=new FileReader();reader.onload=()=>guarded('opening',async()=>{const rows=parseCsv(reader.result);if(rows.length<2)throw Error('The CSV needs a header and item rows.');const items=rows.slice(1).filter(r=>r.some(v=>String(v).trim())).map((r,i)=>{if(r.length<9)throw Error('CSV row '+(i+2)+' is incomplete. Nothing was imported.');return openingCsvItem(r,i+2);});checkPurchase(items,true);await ensureOpeningNumbers();if(!confirm('Import all '+items.length+' rows as opening stock?'))return;if(CLOUD_MODE)await applyOpeningStockItemsCloud(items);else localCommit(state=>{const valid=applyOpeningStockItemsLocal(items);state.openingStock.push({id:nextId('OPS'),openingNo:nextBillNo('opening'),date:todayStr(),items:valid,status:'completed',rev:0});auditIn(state,'Opening CSV imported',items.length+' lines');});alert('All '+items.length+' rows imported.');setScreen('stock');});reader.onerror=()=>alert('Could not read the CSV.');reader.readAsText(file);}
 function hasDownstream(id){return db.sales.some(s=>s.items?.some(it=>it.stockId===id))||db.saleReturns.some(s=>s.items?.some(it=>it.stockId===id))||db.purchaseReturns.some(s=>s.items?.some(it=>it.stockId===id));}
-function economicGroups(rec,opening=false){const items=rec.items;const values=opening?items.map(it=>gstBreakdown(Number(it.cost)*Number(it.qty),Number(it.gst)||0,'included').taxable):purchaseTotals(items,rec).landed;return groupedIncoming(items,values);}
+function economicGroups(rec,opening=false){const items=rec.items;const values=opening?items.map(it=>gstBreakdown(incomingAmount(it,'cost'),Number(it.gst)||0,'included').taxable):purchaseTotals(items,rec).landed;return groupedIncoming(items,values);}
 function billReplacement(current,draft,stocks,type){const isPurchase=type==='purchase'||type==='opening';const next={...clone(current),items:clone(draft),rev:(current.rev||0)+1};const updates={};if(isPurchase){checkPurchase(draft,type==='opening');for(const it of next.items){const old=current.items.find(row=>row.sku===it.sku);if(!old||Number(old.piecesPerBox)!==Number(it.piecesPerBox))throw Error('Product and box size cannot be changed on a saved purchase.');}const before=economicGroups(current,type==='opening'),after=economicGroups(next,type==='opening');for(const id of new Set([...Object.keys(before),...Object.keys(after)])){const s=stocks[id];if(!s||s.mergedInto)throw Error('A product was removed or merged. Use an explicit stock correction.');const a=before[id]||{qty:0,value:0},b=after[id]||{qty:0,value:0};if((a.qty!==b.qty||Math.abs(a.value-b.value)>0.001)&&(s._hasDownstream||hasDownstream(id)||(CLOUD_MODE&&!s._historyTracked)))throw Error('This stock has sales/returns or unverified older cloud history. Historical purchase/opening quantities and cost are locked; use an appropriate documented correction.');const qty=s.qty-a.qty+b.qty,value=s.qty*avgOf(s)-a.value+b.value;if(qty<0||value<-0.01)throw Error('This change would make stock or valuation negative.');updates[id]={qty,avgCost:qty>0?Math.max(0,value)/qty:0};}if(type==='purchase'){const t=purchaseTotals(next.items,next);delete t.landed;Object.assign(next,t);}}
  else{checkSale(draft);if(linkedReturns(current).length||Object.values(current._returnedByLine||{}).some(n=>n>0))throw Error('This sale has returns. Its quantities and prices are locked to preserve the credit history.');
  const original=ensureLines(current.items);next.items=ensureLines(next.items);
@@ -3930,9 +3916,9 @@ async function saveBillDetailEdits(){return guarded('billEdit',async()=>{if(!isO
 async function saveBillDetailEditsCloud(){return saveBillDetailEdits();}
 function openOpeningStockDetail(id){const rec=db.openingStock.find(o=>o.id===id);if(!rec)return;openingDetailCtx={id,originalItems:clone(rec.items),draftItems:clone(rec.items),baseRev:rec.rev||0};setScreen('openingStockDetail');}
 function updateOpeningDetailItem(idx,field,val){const it=openingDetailCtx.draftItems[idx];if(it)it[field]=['itemName','batch','category','subcategory','material','size'].includes(field)?val:Number(val);}
-async function saveOpeningStockEdits(){return guarded('openingEdit',async()=>{if(!isOwner())throw Error('Only owners may edit opening stock.');const ctx=clone(openingDetailCtx);checkPurchase(ctx.draftItems,true);let saved;if(CLOUD_MODE){const ref=fsDB.collection('openingStock').doc(ctx.id);await fsDB.runTransaction(async tx=>{const snap=await tx.get(ref);if(!snap.exists)throw Error('Entry missing.');const rec={id:ref.id,...snap.data()};if(rec.status==='pending'||(rec.rev||0)!==ctx.baseRev)throw Error('Entry changed or unfinished. Reopen it.');const ids=[...new Set([...rec.items,...ctx.draftItems].map(it=>it.sku))],refs=ids.map(id=>fsDB.collection('stock').doc(safeId(id))),snaps=await Promise.all(refs.map(r=>tx.get(r))),stocks=Object.fromEntries(ids.map((id,i)=>[id,snaps[i].exists?snaps[i].data():null]));const result=billReplacement(rec,ctx.draftItems,stocks,'opening');saved=result.record;ids.forEach((id,i)=>tx.update(refs[i],result.updates[id]));tx.set(ref,saved);});upsert('openingStock',saved);}else localCommit(state=>{const rec=state.openingStock.find(r=>r.id===ctx.id);if(!rec||(rec.rev||0)!==ctx.baseRev)throw Error('Entry changed. Reopen it.');const stocks=Object.fromEntries(state.stock.map(s=>[s.id,s])),result=billReplacement(rec,ctx.draftItems,stocks,'opening');for(const [id,v]of Object.entries(result.updates))Object.assign(stocks[id],v);saved=result.record;state.openingStock[state.openingStock.indexOf(rec)]=saved;auditIn(state,'Opening stock edited',rec.openingNo||rec.id);});syncCatalogItem();alert('Opening stock and valuation saved together.');setScreen('fullLedger');});}
+async function saveOpeningStockEdits(){return guarded('openingEdit',async()=>{if(!isOwner())throw Error('Only owners may edit opening stock.');const ctx=clone(openingDetailCtx);checkPurchase(ctx.draftItems,true);let saved;if(CLOUD_MODE){const ref=fsDB.collection('openingStock').doc(ctx.id);await fsDB.runTransaction(async tx=>{const snap=await tx.get(ref);if(!snap.exists)throw Error('Entry missing.');const rec={id:ref.id,...snap.data()};if(rec.status==='pending'||(rec.rev||0)!==ctx.baseRev)throw Error('Entry changed or unfinished. Reopen it.');const ids=[...new Set([...rec.items,...ctx.draftItems].map(it=>it.sku))];assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(safeId(id))),snaps=await Promise.all(refs.map(r=>tx.get(r))),stocks=Object.fromEntries(ids.map((id,i)=>[id,snaps[i].exists?snaps[i].data():null]));const result=billReplacement(rec,ctx.draftItems,stocks,'opening');saved=result.record;ids.forEach((id,i)=>tx.update(refs[i],result.updates[id]));tx.set(ref,saved);tx.set(fsDB.collection('auditLog').doc(uid()),{action:'Opening stock edited',detail:rec.openingNo||rec.id,role:serverRole,at:new Date().toISOString(),before:rec.items,after:saved.items,createdAt:firebase.firestore.FieldValue.serverTimestamp()});});upsert('openingStock',saved);}else localCommit(state=>{const rec=state.openingStock.find(r=>r.id===ctx.id);if(!rec||rec.status==='pending'||(rec.rev||0)!==ctx.baseRev)throw Error('Entry changed or unfinished. Reopen it.');const stocks=Object.fromEntries(state.stock.map(s=>[s.id,s])),result=billReplacement(rec,ctx.draftItems,stocks,'opening');for(const [id,v]of Object.entries(result.updates))Object.assign(stocks[id],v);saved=result.record;state.openingStock[state.openingStock.indexOf(rec)]=saved;auditIn(state,'Opening stock edited',rec.openingNo||rec.id);Object.assign(state.auditLog[state.auditLog.length-1],{before:clone(rec.items),after:clone(saved.items)});});syncCatalogItem();alert('Opening stock and valuation saved together.');setScreen('fullLedger');});}
 async function mergeDuplicates(idsCsv){return guarded('merge',async()=>{if(!isOwner())throw Error('Only owners may merge products.');const ids=[...new Set(idsCsv.split(','))];if(ids.length<2)return;if(!confirm('Merge these products, preserving their combined quantity and cost?'))return;const combine=items=>{if(items.some(s=>!s||s.mergedInto))throw Error('A product has already been merged. Reload.');if(items.some(s=>s.piecesPerBox!==items[0].piecesPerBox))throw Error('Cannot merge different box sizes.');const primary=items.reduce((a,b)=>a.qty>=b.qty?a:b),qty=items.reduce((n,s)=>n+s.qty,0),value=items.reduce((n,s)=>n+s.qty*avgOf(s),0);return {primary,qty,avgCost:qty?value/qty:avgOf(primary)};};if(CLOUD_MODE){await fsDB.runTransaction(async tx=>{const refs=ids.map(id=>fsDB.collection('stock').doc(safeId(id))),snaps=await Promise.all(refs.map(r=>tx.get(r))),items=snaps.map((s,i)=>s.exists?{id:ids[i],...s.data()}:null),g=combine(items);items.forEach((s,i)=>tx.update(refs[i],s.id===g.primary.id?{qty:g.qty,avgCost:g.avgCost,_hasDownstream:true}:{qty:0,mergedInto:g.primary.id,discontinued:true}));});}else localCommit(state=>{const items=ids.map(id=>state.stock.find(s=>s.id===id)),g=combine(items);items.forEach(s=>Object.assign(s,s.id===g.primary.id?{qty:g.qty,avgCost:g.avgCost,_hasDownstream:true}:{qty:0,mergedInto:g.primary.id,discontinued:true}));auditIn(state,'Products merged',ids.join(', '));});syncCatalogItem();alert('Products merged.');render();});}
-async function savePurchaseReturn(){return guarded('purchaseReturn',async()=>{const d=clone(purchaseReturnDraft);for(const it of d.items){numeric(it.qty,'Return quantity');numeric(it.rate,'Return rate');numeric(it.gst||0,'GST',0,100);units({...it,freeQty:0},'purchase');}const items=d.items.filter(it=>Number(it.qty)>0);if(!items.length)throw Error('Enter a positive return quantity.');if(d.partyId&&!db.parties.some(p=>p.id===d.partyId&&p.type==='supplier'))throw Error('Select an existing supplier.');items.forEach(it=>{const s=stockById(it.stockId);if(!s)throw Error('Product missing.');it.stockId=s.id;});if(!purchaseReturnDraft.operationId)purchaseReturnDraft.operationId=uid();const operationId=purchaseReturnDraft.operationId,needs=Object.create(null);let totalAmount=0,totalGst=0;items.forEach(it=>{needs[it.stockId]=(needs[it.stockId]||0)+units({...it,freeQty:0},'purchase');const br=gstBreakdown(Number(it.qty)*Number(it.rate),Number(it.gst||0),d.gstMode);totalAmount+=br.taxable;totalGst+=br.gst;});let saved;const fields={date:todayStr(),partyId:d.partyId||null,items,gstMode:d.gstMode,totalAmount:amount(totalAmount),totalGst:amount(totalGst),operationId};if(CLOUD_MODE){const ref=fsDB.collection('purchaseReturns').doc(operationId),billNo=await nextBillNoCloud('purchase');await fsDB.runTransaction(async tx=>{const done=await tx.get(ref);if(done.exists){saved={id:ref.id,...done.data()};return;}const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),snaps=await Promise.all(refs.map(r=>tx.get(r)));snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Return exceeds current stock.');});const inventoryCost=ids.reduce((sum,id,i)=>sum+needs[id]*avgOf(snaps[i].data()),0);snaps.forEach((s,i)=>tx.update(refs[i],staffStockUpdate(s.data().qty-needs[ids[i]],operationId,'purchaseReturns')));saved={id:ref.id,billNo,...fields,inventoryCost,...actorFields(),stockChanges:stockChanges(needs,-1),createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.set(ref,saved);});upsert('purchaseReturns',saved);}else localCommit(state=>{for(const [id,n]of Object.entries(needs)){const s=stockById(id,state);if(!s||s.qty<n)throw Error('Return exceeds current stock.');}const inventoryCost=Object.entries(needs).reduce((sum,[id,n])=>sum+n*avgOf(stockById(id,state)),0);for(const [id,n]of Object.entries(needs))Object.assign(stockById(id,state),{qty:stockById(id,state).qty-n,_hasDownstream:true});saved={id:nextId('PRET'),billNo:nextBillNo('purchase'),...fields,inventoryCost};state.purchaseReturns.push(saved);auditIn(state,'Purchase return',saved.billNo);});purchaseReturnDraft={gstMode:'excluded',partyId:null,items:[]};syncCatalogItem();openPrintPreview('purchaseReturn',saved.id);});}
+async function savePurchaseReturn(){return guarded('purchaseReturn',async()=>{const d=clone(purchaseReturnDraft);for(const it of d.items){numeric(it.qty,'Return quantity');numeric(it.rate,'Return rate');numeric(it.gst||0,'GST',0,100);units({...it,freeQty:0,freePieceQty:0},'purchase');}const items=d.items.filter(it=>incomingPaidUnits(it)>0);if(!items.length)throw Error('Enter a positive return quantity.');if(d.partyId&&!db.parties.some(p=>p.id===d.partyId&&p.type==='supplier'))throw Error('Select an existing supplier.');items.forEach(it=>{const s=stockById(it.stockId);if(!s)throw Error('Product missing.');it.stockId=s.id;});if(!purchaseReturnDraft.operationId)purchaseReturnDraft.operationId=uid();const operationId=purchaseReturnDraft.operationId,needs=Object.create(null);let totalAmount=0,totalGst=0;items.forEach(it=>{needs[it.stockId]=(needs[it.stockId]||0)+units({...it,freeQty:0,freePieceQty:0},'purchase');const br=gstBreakdown(incomingAmount(it),Number(it.gst||0),d.gstMode);totalAmount+=br.taxable;totalGst+=br.gst;});let saved;const fields={date:todayStr(),partyId:d.partyId||null,items,gstMode:d.gstMode,totalAmount:amount(totalAmount),totalGst:amount(totalGst),operationId};if(CLOUD_MODE){const ref=fsDB.collection('purchaseReturns').doc(operationId),billNo=await nextBillNoCloud('purchase');await fsDB.runTransaction(async tx=>{const done=await tx.get(ref);if(done.exists){saved={id:ref.id,...done.data()};return;}const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),snaps=await Promise.all(refs.map(r=>tx.get(r)));snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Return exceeds current stock.');});const inventoryCost=ids.reduce((sum,id,i)=>sum+needs[id]*avgOf(snaps[i].data()),0);snaps.forEach((s,i)=>tx.update(refs[i],staffStockUpdate(s.data().qty-needs[ids[i]],operationId,'purchaseReturns')));saved={id:ref.id,billNo,...fields,inventoryCost,...actorFields(),stockChanges:stockChanges(needs,-1),createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.set(ref,saved);});upsert('purchaseReturns',saved);}else localCommit(state=>{for(const [id,n]of Object.entries(needs)){const s=stockById(id,state);if(!s||s.qty<n)throw Error('Return exceeds current stock.');}const inventoryCost=Object.entries(needs).reduce((sum,[id,n])=>sum+n*avgOf(stockById(id,state)),0);for(const [id,n]of Object.entries(needs))Object.assign(stockById(id,state),{qty:stockById(id,state).qty-n,_hasDownstream:true});saved={id:nextId('PRET'),billNo:nextBillNo('purchase'),...fields,inventoryCost};state.purchaseReturns.push(saved);auditIn(state,'Purchase return',saved.billNo);});purchaseReturnDraft={gstMode:'excluded',partyId:null,items:[]};syncCatalogItem();openPrintPreview('purchaseReturn',saved.id);});}
 async function savePurchaseReturnCloud(){return savePurchaseReturn();}
 async function saveStockAdjustment(stockId){return guarded('stockAdjust',async()=>{if(!isOwner())throw Error('Only owners may correct stock.');const original=stockById(stockId);if(!original)throw Error('Product missing.');const qty=units({piecesPerBox:original.piecesPerBox,boxQty:document.getElementById('adjustBoxes').value,pieceQty:document.getElementById('adjustPieces').value}),reason=document.getElementById('adjustReason').value,note=document.getElementById('adjustNote').value.trim(),old=original.qty;if(qty===old)return;if(!confirm('Correct '+original.itemName+' from '+old+' to '+qty+' pieces?'))return;if(CLOUD_MODE){const ref=fsDB.collection('stock').doc(original.id),audit=fsDB.collection('auditLog').doc(uid());await fsDB.runTransaction(async tx=>{const snap=await tx.get(ref);if(!snap.exists||snap.data().qty!==old||snap.data().mergedInto)throw Error('Stock changed on another device. Reload before correcting it.');tx.update(ref,{qty,_hasDownstream:true});tx.set(audit,{action:'Stock corrected',detail:original.id+' '+old+' → '+qty+' '+reason+' '+note,role:serverRole,at:new Date().toISOString(),createdAt:firebase.firestore.FieldValue.serverTimestamp()});});}else localCommit(state=>{Object.assign(stockById(original.id,state),{qty,_hasDownstream:true});auditIn(state,'Stock corrected',original.id+' '+old+' → '+qty+' '+reason+' '+note);});syncCatalogItem();alert('Stock correction saved.');render();});}
 async function saveStaffEntry(staffId){return guarded('staffEntry',async()=>{if(!isOwner())throw Error('Only owners may record salary entries.');const type=document.getElementById('staffEntryType').value,amountValue=numeric(document.getElementById('staffEntryAmount').value,'Amount',0.01),date=document.getElementById('staffEntryDate').value,note=document.getElementById('staffEntryNote').value.trim();if(!['due','payment','advance'].includes(type)||!/^\d{4}-\d{2}-\d{2}$/.test(date))throw Error('Select a valid date and entry type.');if(!db.staff.some(s=>s.id===staffId))throw Error('Staff member missing.');const id=uid(),entry={id,staffId,type,amount:amount(amountValue),date,note},expense={id:'salary-'+id,date,category:'Staff Salary',amount:amount(amountValue),billRef:id,note:'Salary paid to '+db.staff.find(s=>s.id===staffId).name};if(CLOUD_MODE){const batch=fsDB.batch();batch.set(fsDB.collection('staffLedger').doc(id),{...entry,createdAt:firebase.firestore.FieldValue.serverTimestamp()});if(type==='payment')batch.set(fsDB.collection('expenses').doc(expense.id),{...expense,createdAt:firebase.firestore.FieldValue.serverTimestamp()});await batch.commit();}else localCommit(state=>{state.staffLedger.push(entry);if(type==='payment')state.expenses.push(expense);auditIn(state,'Staff entry',type+' '+amountValue);});document.getElementById('staffEntryAmount').value='';render();});}
@@ -3944,7 +3930,7 @@ function validateDatabase(input){if(!input||typeof input!=='object'||Array.isArr
  for(const c of ['saleReturns','purchaseReturns'])for(const r of data[c]){numeric(r.totalAmount,'Return total');numeric(r.totalGst||0,'Return tax');if(!Array.isArray(r.items))throw Error('Invalid return items.');r.items.forEach(it=>units(it,c==='saleReturns'?'sale':'purchase'));}
  for(const c of ['expenses','payments','staffLedger'])for(const r of data[c])numeric(r.amount,'Amount',0);for(const p of data.parties)numeric(p.openingBalance||0,'Opening balance',-Number.MAX_SAFE_INTEGER);for(const r of [...data.sales,...data.purchases,...data.payments])if(r.partyId&&!data.parties.some(p=>p.id===r.partyId))throw Error('Record refers to a missing party.');
  const checkTree=v=>{if(v&&typeof v==='object')for(const k of Object.keys(v)){if(['__proto__','constructor','prototype'].includes(k))throw Error('Unsafe field name in backup.');checkTree(v[k]);}else if(typeof v==='number'&&!Number.isFinite(v))throw Error('Invalid numeric value.');};checkTree(data);data.categories=data.categories||defaultCategories();if(typeof data.categories!=='object'||Array.isArray(data.categories))throw Error('Invalid categories.');for(const c of Object.values(data.categories))if(!c||!Array.isArray(c.subs)||!Array.isArray(c.materials))throw Error('Invalid category structure.');data.shopInfo=data.shopInfo||{name:'Hammad World',gstin:'',address:'',phone:''};data.seqs=data.seqs&&typeof data.seqs==='object'&&!Array.isArray(data.seqs)?data.seqs:{};data.schemaVersion=3;return data;}
-function importBackup(file){if(!file)return;const reader=new FileReader();reader.onload=()=>guarded('restore',async()=>{if(CLOUD_MODE)throw Error('Cloud restore is not a local import. Disconnect cloud and restore into a separate local test copy first.');if(!isOwner())throw Error('Only owners may restore backups.');let parsed;try{parsed=validateDatabase(JSON.parse(reader.result));}catch(e){throw Error('Backup rejected. Nothing changed. '+e.message);}if(!confirm('Replace this device’s local records with '+parsed.stock.length+' products and '+parsed.sales.length+' sales? A recovery copy will be kept.'))return;const before=clone(db),raw=localStorage.getItem(DB_KEY);localStorage.setItem(DB_KEY+'_recovery',raw||JSON.stringify(before));try{saveDB(parsed);db=parsed;render();alert('Backup restored. A copy of the previous database is available under Recovery.');}catch(e){db=before;throw e;}});reader.onerror=()=>alert('Could not read backup file.');reader.readAsText(file);}
+function importBackup(file){if(!file)return;const reader=new FileReader();reader.onload=()=>guarded('restore',async()=>{if(CLOUD_MODE)throw Error('Cloud restore is not a local import. Disconnect cloud and restore into a separate local test copy first.');if(!isOwner())throw Error('Only owners may restore backups.');let parsed;try{parsed=validateDatabase(JSON.parse(reader.result));}catch(e){throw Error('Backup rejected. Nothing changed. '+e.message);}if(!confirm('Replace this device’s local records with '+parsed.stock.length+' products and '+parsed.sales.length+' sales? A recovery copy will be kept.'))return;const before=clone(db),raw=localStorage.getItem(DB_KEY);localStorage.setItem(DB_KEY+'_recovery',raw||JSON.stringify(before));try{saveDB(parsed);db=parsed;hwOpeningNumberScope='';render();alert('Backup restored. A copy of the previous database is available under Recovery.');}catch(e){db=before;throw e;}});reader.onerror=()=>alert('Could not read backup file.');reader.readAsText(file);}
 function downloadJSON(data,name){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function exportRecovery(){
   if(!requireOwner())return;const raw=localStorage.getItem(DB_KEY+'_recovery');if(!raw){alert('No recovery copy has been created.');return;}downloadJSON(JSON.parse(raw),'hammad-world-recovery.json');}
@@ -4013,11 +3999,11 @@ function hwResumeCatalogPublish(){if(localStorage.getItem('hw_catalog_pending')!
 setInterval(hwResumeCatalogPublish,60*1000);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')hwResumeCatalogPublish();});
 
-function readOnlyItems(items){return '<div class="card"><h3>Items</h3>'+items.map(it=>'<div class="list-row"><div><div class="li-main">'+escapeHtml(it.itemName||it.stockId||it.sku)+'</div><div class="li-sub">'+escapeHtml(it.qty!=null?it.qty+' boxes':(it.boxQty||0)+' boxes + '+(it.pieceQty||0)+' pieces')+'</div></div></div>').join('')+'</div>';}
+function readOnlyItems(items){return '<div class="card"><h3>Items</h3>'+items.map(it=>'<div class="list-row"><div><div class="li-main">'+escapeHtml(it.itemName||it.stockId||it.sku)+'</div><div class="li-sub">'+escapeHtml(it.qty!=null?incomingQuantityLabel(it):(it.boxQty||0)+' boxes + '+(it.pieceQty||0)+' pieces')+'</div></div></div>').join('')+'</div>';}
 function renderReadOnlyBill(){
  const ctx=billDetailCtx,rec=(ctx.type==='purchase'?db.purchases:db.sales).find(r=>r.id===ctx.id);
  if(!rec)return '<div class="empty">Bill not found.</div>';
- const purchase=ctx.type==='purchase';const rows=(rec.items||[]).map(it=>'<div class="list-row"><div><b>'+escapeHtml(it.itemName||it.stockId||it.sku)+'</b><div>'+escapeHtml(purchase?(it.qty||0)+' boxes + '+(it.freeQty||0)+' free · '+(it.piecesPerBox||1)+' pieces/box':(it.boxQty||0)+' boxes + '+(it.pieceQty||0)+' pieces')+'</div><div>Rate: '+escapeHtml(fmt(purchase?it.rate:it.boxPrice))+' / box · GST '+escapeHtml(it.gst||0)+'%</div></div><div>'+escapeHtml(fmt(purchase?(it.qty||0)*(it.rate||0):(it.boxQty||0)*(it.boxPrice||0)+(it.pieceQty||0)*(it.piecePrice||0)))+'</div></div>').join('');
+ const purchase=ctx.type==='purchase';const rows=(rec.items||[]).map(it=>'<div class="list-row"><div><b>'+escapeHtml(it.itemName||it.stockId||it.sku)+'</b><div>'+escapeHtml(purchase?incomingQuantityLabel(it):(it.boxQty||0)+' boxes + '+(it.pieceQty||0)+' pieces')+'</div><div>Rate: '+escapeHtml((purchase?incomingRateLabel(it):fmt(it.boxPrice)+' / box'))+' · GST '+escapeHtml(it.gst||0)+'%</div></div><div>'+escapeHtml(fmt(purchase?incomingAmount(it):(it.boxQty||0)*(it.boxPrice||0)+(it.pieceQty||0)*(it.piecePrice||0)))+'</div></div>').join('');
  return '<button class="btn btn-ghost" onclick="goBackFromBillDetail()">← Back</button><div class="card"><h3>'+escapeHtml(rec.billNo||rec.id)+'</h3><p>'+escapeHtml(rec.date)+' · '+escapeHtml(purchase?rec.supplier:rec.customer)+'</p>'+(purchase?'<p>Supplier invoice: '+escapeHtml(rec.supplierBillNo||'—')+'</p><p>Bill value: '+escapeHtml(fmt((rec.totalAmount||0)+(rec.totalGst||0)))+' · Actual payable: '+escapeHtml(fmt(rec.actualAmountPaid??((rec.totalAmount||0)+(rec.totalGst||0)+(rec.additionalChargesTotal||0))))+'</p>':'<p>Total: '+escapeHtml(fmt(rec.totalAmount||0))+'</p>')+'</div><div class="card"><h3>Products to verify</h3>'+rows+'</div><button class="btn btn-ghost" onclick="openPrintPreview(\''+inlineValue(ctx.type)+'\',\''+inlineValue(ctx.id)+'\')">View / print bill</button>';
 }
 
@@ -4109,6 +4095,134 @@ const hwOldPrint=renderPrintPreview;
 renderPrintPreview=function(){let content=hwOldPrint();const map={sale:'sales',purchase:'purchases',saleReturn:'saleReturns',quotation:'quotations'};const rec=db[map[printDoc?.type]]?.find(r=>r.id===printDoc.id);if(rec?.createdByName)content='<div class="step">Entered by '+escapeHtml(rec.createdByName)+' · '+escapeHtml(rec.enteredAt||rec.date)+'</div>'+content;return content;};
 
 window.render=render;window.saveSale=saveSale;window.savePurchase=savePurchase;window.saveSaleReturn=saveSaleReturn;window.saveQuotation=saveQuotation;
+/* Incoming units revision. qty/freeQty and rate/cost/mrp retain their historical
+   BOX meaning. pieceQty/freePieceQty are additional whole pieces. entryUnit is
+   presentation only: changing it never changes the stock or value of a line. */
+function incomingPaidUnits(it){return units({...it,freeQty:0,freePieceQty:0},'purchase');}
+function incomingAmount(it,key='rate'){
+ const p=Number(it.piecesPerBox)||1,rate=Number(it[key])||0;
+ return Number(it.qty||0)*rate+Number(it.pieceQty||0)*(rate/p);
+}
+function incomingMode(it){return ['box','piece','mixed'].includes(it.entryUnit)?it.entryUnit:(Number(it.piecesPerBox)===1?'piece':Number(it.pieceQty||0)||Number(it.freePieceQty||0)?'mixed':'box');}
+function incomingRateLabel(it,key='rate'){
+ const piece=incomingMode(it)==='piece'||Number(it.piecesPerBox)===1;
+ return fmt(Number(it[key]||0)/(piece?(Number(it.piecesPerBox)||1):1))+' / '+(piece?'piece':'box');
+}
+function stockQuantityLabel(s){const p=Number(s.piecesPerBox)||1,n=Number(s.qty)||0;return p===1?n+' pieces':Math.floor(n/p)+' boxes'+(n%p?' + '+(n%p)+' pieces':'');}
+function incomingQuantityLabel(it){
+ const p=Number(it.piecesPerBox)||1,paid=Number(it.qty||0)*p+Number(it.pieceQty||0),free=Number(it.freeQty||0)*p+Number(it.freePieceQty||0);
+ const label=n=>incomingMode(it)==='piece'||p===1?n+' pieces':stockQuantityLabel({qty:n,piecesPerBox:p});
+ return label(paid)+(free?' + '+label(free)+' free':'');
+}
+function incomingDraft(kind){return kind==='purchase'?purchaseDraft.items:kind==='opening'?openingStockDraft.items:kind==='return'?purchaseReturnDraft.items:kind==='purchaseEdit'?billDetailCtx.draftItems:openingDetailCtx.draftItems;}
+function setIncomingMode(it,mode){
+ if(!['box','piece','mixed'].includes(mode))throw Error('Select Box, Piece or Box + loose pieces.');
+ if(!Number(it.piecesPerBox)&&mode==='piece')it.piecesPerBox=1;
+ const p=Number(it.piecesPerBox)||1,paid=Number(it.qty||0)*p+Number(it.pieceQty||0),free=Number(it.freeQty||0)*p+Number(it.freePieceQty||0);
+ if(mode==='piece'){it.qty=0;it.pieceQty=paid;it.freeQty=0;it.freePieceQty=free;}
+ else {it.qty=Math.floor(paid/p);it.pieceQty=paid%p;it.freeQty=Math.floor(free/p);it.freePieceQty=free%p;if(it.pieceQty||it.freePieceQty)mode='mixed';}
+ it.entryUnit=mode;
+}
+function changeIncomingMode(kind,idx,mode){
+ try{if((kind.endsWith('Edit')||kind==='opening')&&!isOwner())throw Error('Only owners may edit this entry.');const it=incomingDraft(kind)[idx];setIncomingMode(it,mode);render();}catch(e){alert(e.message);}
+}
+function updateIncomingField(kind,idx,field,value){
+ if((kind.endsWith('Edit')||kind==='opening')&&!isOwner())return;
+ const it=incomingDraft(kind)[idx];if(!it)return;
+ const p=Number(it.piecesPerBox)||1,piece=incomingMode(it)==='piece';
+ if(['rate','cost','mrp'].includes(field))it[field]=Number(value)*(piece?p:1);
+ else if(field==='piecesPerBox'){
+  if(it.sku||kind.endsWith('Edit')||kind==='return')return;
+  // Editing a packing factor in piece mode preserves the entered per-piece rates.
+  const next=Number(value);if(piece&&next>0)for(const k of ['rate','cost','mrp'])if(it[k]!=null)it[k]=Number(it[k])/p*next;
+  it.piecesPerBox=next;
+ }else if(['qty','pieceQty','freeQty','freePieceQty'].includes(field))it[field]=Number(value);
+ refreshIncomingSummary(kind);
+}
+function renderIncomingFields(it,idx,kind){
+ setIncomingMode(it,incomingMode(it));
+ const mode=incomingMode(it),piece=mode==='piece',mixed=mode==='mixed',opening=kind.startsWith('opening'),edit=kind.endsWith('Edit'),isReturn=kind==='return';
+ const p=Number(it.piecesPerBox)||1,rateKey=opening?'cost':'rate',unit=piece?'piece':'box',locked=!!it.sku||edit||isReturn;
+ // Historical one-piece products are shown naturally without rewriting their saved lines.
+ const paid=Number(it.qty||0)*p+Number(it.pieceQty||0),free=Number(it.freeQty||0)*p+Number(it.freePieceQty||0);
+ const field=(label,key,value,readOnly=false)=>`<div class="field"><label for="incoming_${kind}_${idx}_${key}">${label}</label><input id="incoming_${kind}_${idx}_${key}" data-incoming-kind="${kind}" data-incoming-field="${key}" type="number" min="0" step="${['qty','pieceQty','freeQty','freePieceQty','piecesPerBox'].includes(key)?'1':'any'}" value="${escapeHtml(value??'')}" ${readOnly?'readonly':''} oninput="updateIncomingField('${kind}',${idx},'${key}',this.value)"></div>`;
+ return `<div class="field"><label for="incoming_${kind}_${idx}_unit">Entry unit</label><select id="incoming_${kind}_${idx}_unit" onchange="changeIncomingMode('${kind}',${idx},this.value)">${[['box','Box'],['piece','Piece'],['mixed','Box + loose pieces']].map(([v,t])=>`<option value="${v}" ${mode===v?'selected':''}>${t}</option>`).join('')}</select></div>
+ ${piece&&p===1?'<div class="step">Individual pieces — no box quantity required.</div>':field('Pieces per box'+(locked?' (fixed)':''),'piecesPerBox',it.piecesPerBox||'',locked)}
+ <div class="row2">${field((opening?'Opening':isReturn?'Return':'Paid')+' quantity ('+(piece?'pieces':'boxes')+')',piece?'pieceQty':'qty',piece?paid:Number(it.qty||0))}${mixed?field('Loose pieces','pieceQty',it.pieceQty||0):''}</div>
+ ${!opening&&!isReturn?`<div class="row2">${field('Free '+(piece?'pieces':'boxes'),piece?'freePieceQty':'freeQty',piece?free:Number(it.freeQty||0))}${mixed?field('Free loose pieces','freePieceQty',it.freePieceQty||0):''}</div>`:''}
+ <div class="row2">${field((opening?'Cost':'Rate')+' per '+unit+(opening?' (incl. GST)':''),rateKey,Number(it[rateKey]||0)/(piece?p:1))}${!isReturn&&kind!=='openingEdit'?field('MRP per '+unit+' (incl. GST)','mrp',Number(it.mrp||0)/(piece?p:1)):''}</div>
+ ${mixed?`<div class="step">Loose pieces use the box rate ÷ pieces per box.</div>`:''}
+ <div class="step" id="incoming_summary_${kind}_${idx}">${escapeHtml(incomingQuantityLabel(it))} · Value ${escapeHtml(fmt(incomingAmount(it,rateKey)))}</div>`;
+}
+function refreshIncomingSummary(kind){
+ incomingDraft(kind).forEach((it,idx)=>{const el=document.getElementById('incoming_summary_'+kind+'_'+idx);if(el)el.textContent=incomingQuantityLabel(it)+' · Value '+fmt(incomingAmount(it,kind.startsWith('opening')?'cost':'rate'));});
+ document.querySelectorAll('[data-incoming-total]').forEach(el=>{
+  const type=el.dataset.incomingTotal;const d=kind==='opening'?openingStockDraft:kind==='return'?purchaseReturnDraft:purchaseDraft;
+  if(kind==='opening'){if(type==='opening')el.textContent=fmt(d.items.reduce((sum,it)=>sum+incomingAmount(it,'cost'),0));return;}
+  if(!['purchase','return'].includes(kind))return;
+  let taxable=0,gst=0;for(const it of d.items){const br=gstBreakdown(incomingAmount(it),Number(it.gst)||0,d.gstMode);taxable+=br.taxable;gst+=br.gst;}
+  const charges=(d.additionalCharges||[]).reduce((sum,c)=>sum+Number(c.amount||0),0);
+  el.textContent=fmt(type==='taxable'?taxable:type==='gst'?gst:taxable+gst+charges);
+ });
+ document.querySelectorAll('[data-incoming-line]').forEach(el=>{const idx=Number(el.dataset.incomingLine),it=incomingDraft(kind)[idx];if(!it)return;const d=kind==='return'?purchaseReturnDraft:purchaseDraft;if(kind==='opening'){el.textContent=fmt(incomingAmount(it,'cost'));return;}if(kind!=='purchase'&&kind!=='return')return;const br=gstBreakdown(incomingAmount(it),Number(it.gst)||0,d.gstMode);el.textContent='Taxable '+fmt(br.taxable)+' • GST '+fmt(br.gst)+' • Line total '+fmt(br.total);});
+}
+function openingCsvItem(r,row){
+ const mode=String(r[11]||'box').trim().toLowerCase();if(!['box','piece','mixed'].includes(mode))throw Error('CSV row '+row+': unit must be box, piece or mixed.');
+ const p=Number(r[6]||(mode==='piece'?1:0)),q=Number(r[7]),loose=Number(r[12]||0);
+ if(mode!=='mixed'&&loose!==0)throw Error('CSV row '+row+': loose pieces require mixed unit.');
+ return {itemName:r[0].trim(),category:r[1].trim(),subcategory:(r[2]||'').trim(),material:(r[3]||'').trim(),size:(r[4]||'').trim(),batch:(r[5]||'').trim(),piecesPerBox:p,entryUnit:mode,qty:mode==='piece'?0:q,pieceQty:mode==='piece'?q:loose,cost:Number(r[8])*(mode==='piece'?p:1),mrp:Number(r[9]||r[8])*(mode==='piece'?p:1),gst:Number(r[10]||0)};
+}
+function openingEditLock(it){const s=db.stock.find(s=>s.id===it.sku);if(!s||s.mergedInto)return 'This product was removed or merged. Reconcile its stock before editing.';if(s._hasDownstream||hasDownstream(it.sku))return 'This stock already has later activity. Historical quantity and cost are protected; record a stock correction after checking the current quantity.';if(CLOUD_MODE&&!s._historyTracked)return 'Older stock history is not verified. Reconcile it before changing the opening quantity or cost.';return '';}
+
+/* HWO numbers are display references, separate from immutable document IDs.
+   Only the opening counter is touched. A retry reuses the saved number. */
+let hwOpeningNumberPromise=null,hwOpeningNumberScope='',hwOpeningNumberError='',hwOpeningNumberScheduled=false;
+function openingSequence(rec){const m=/^HWO(\d+)$/.exec(String(rec.openingNo||''));return m&&Number.isSafeInteger(Number(m[1]))&&Number(m[1])>0?Number(m[1]):0;}
+function openingTime(rec){const ts=rec.createdAt;return typeof ts?.toMillis==='function'?ts.toMillis():ts?.seconds?ts.seconds*1000:Date.parse(rec.enteredAt||rec.date||'')||0;}
+function compareOpeningCreation(a,b){return openingTime(a)-openingTime(b)||String(a.id).localeCompare(String(b.id));}
+function compareOpeningNumbers(a,b){return (openingSequence(a)||Number.MAX_SAFE_INTEGER)-(openingSequence(b)||Number.MAX_SAFE_INTEGER)||compareOpeningCreation(a,b);}
+function nextOpeningSequence(current){const n=Number(current||0)+1;if(!Number.isSafeInteger(n)||n<1)throw Error('Opening-stock counter needs owner review.');return n;}
+async function ensureOpeningNumbers(force=false){
+ if(!isOwner())return;
+ const scope=CLOUD_MODE?'cloud:'+getStoredConfig()?.projectId:'local';
+ if(hwOpeningNumberPromise)return hwOpeningNumberPromise;
+ if(!force&&hwOpeningNumberScope===scope)return;
+ hwOpeningNumberError='';
+ hwOpeningNumberPromise=(async()=>{
+  if(!CLOUD_MODE){
+   const rows=(db.openingStock||[]).slice().sort(compareOpeningCreation),seen=new Set();
+   if(!db.seqs)db.seqs={};
+   for(const row of rows){const n=openingSequence(row);if(n&&seen.has(n))throw Error('Duplicate opening numbers need review. No numbers were changed.');if(n)seen.add(n);}
+   localCommit(state=>{let seq=Math.max(Number(state.seqs.HWNO_opening||1)-1,Array.from(seen).reduce((a,b)=>Math.max(a,b),0));for(const row of rows)if(!openingSequence(row)){seq=nextOpeningSequence(seq);const rec=state.openingStock.find(r=>r.id===row.id);rec.legacyOpeningNo=rec.openingNo||rec.id;rec.openingNo=formatBillNo('opening',seq);rec.openingSequence=seq;}state.seqs.HWNO_opening=seq+1;});
+  }else{
+   // Read the complete collection once: monthly subscriptions are not a numbering baseline.
+   const all=await fsDB.collection('openingStock').get({source:'server'}),rows=all.docs.map(d=>({id:d.id,...d.data()})).sort(compareOpeningCreation),seen=new Set();
+   for(const row of rows){const n=openingSequence(row);if(n&&seen.has(n))throw Error('Duplicate opening numbers need review. No numbers were changed.');if(n)seen.add(n);}
+   const baseline=Array.from(seen).reduce((a,b)=>Math.max(a,b),0),counterRef=fsDB.collection('meta').doc('billCounter_opening');
+   await fsDB.runTransaction(async tx=>{const counter=await tx.get(counterRef);const seq=Math.max(Number(counter.exists?counter.data().seq:0)||0,baseline);tx.set(counterRef,{seq},{merge:true});});
+   const missing=rows.filter(row=>!openingSequence(row));
+   for(let start=0;start<missing.length;start+=100){
+    const part=missing.slice(start,start+100),refs=part.map(row=>fsDB.collection('openingStock').doc(safeId(row.id)));
+    const changed=await fsDB.runTransaction(async tx=>{
+     const counter=await tx.get(counterRef),snaps=await Promise.all(refs.map(ref=>tx.get(ref)));let seq=Number(counter.data().seq)||0;const result=[];
+     snaps.forEach((snap,i)=>{if(!snap.exists)return;const rec={id:refs[i].id,...snap.data()};if(!openingSequence(rec)){seq=nextOpeningSequence(seq);const update={legacyOpeningNo:rec.legacyOpeningNo||rec.openingNo||rec.id,openingNo:formatBillNo('opening',seq),openingSequence:seq};tx.update(refs[i],update);Object.assign(rec,update);}result.push(rec);});
+     tx.set(counterRef,{seq},{merge:true});return result;
+    });
+    changed.forEach(rec=>{if(rec.status!=='pending')upsert('openingStock',rec);});
+   }
+  }
+  hwOpeningNumberScope=scope;
+ })();
+ try{await hwOpeningNumberPromise;}catch(e){hwOpeningNumberError=e.message;throw e;}finally{hwOpeningNumberPromise=null;}
+}
+function scheduleOpeningNumbering(){
+ if(!isOwner()||hwOpeningNumberScheduled||hwOpeningNumberPromise||hwOpeningNumberError||hwBusy.size||(CLOUD_MODE&&(!hwCloudReady||hwCloudError||!navigator.onLine||hasPendingOpening()))||!db.openingStock.some(r=>!openingSequence(r)))return;
+ hwOpeningNumberScheduled=true;
+ setTimeout(async()=>{hwOpeningNumberScheduled=false;if(hwBusy.size)return;await guarded('openingNumbers',async()=>{await ensureOpeningNumbers(true);});render();},0);
+}
+function openingNumberingNotice(){return hwOpeningNumberError?`<div class="step">Opening numbering: ${escapeHtml(hwOpeningNumberError)}</div><button class="btn btn-ghost" onclick="retryOpeningNumbers()">Retry numbering</button>`:hwOpeningNumberPromise||hwOpeningNumberScheduled?'<div class="step">Organising opening numbers…</div>':'<div class="step">Opening numbers use their own HWO sequence, separate from purchases and sales.</div>';}
+async function retryOpeningNumbers(){await guarded('openingNumbers',async()=>{await ensureOpeningNumbers(true);});render();}
+
 const cloudStarting = initCloudIfConfigured();
 updateCloudBadge();
 if(!cloudStarting){
