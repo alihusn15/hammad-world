@@ -935,7 +935,7 @@ function renderPurchaseReturn(){
     </div>
     <div class="card">
       <h3>Find item to return</h3>
-      <div class="field"><label>Search stock by product name</label><input id="pReturnSearch" placeholder="Type product name..." oninput="renderPReturnSearchResults(this.value)"/></div>
+      <div class="field"><label>Search stock by product name, size or SKU</label><input id="pReturnSearch" placeholder="Type product name, size or SKU..." oninput="renderPReturnSearchResults(this.value)"/></div>
       <div id="pReturnSearchResults"></div>
     </div>
     <div class="card">
@@ -957,11 +957,11 @@ function renderPReturnSearchResults(q){
   const box = document.getElementById('pReturnSearchResults');
   const query = (q||'').trim().toLowerCase();
   if(!query){ box.innerHTML=''; return; }
-  const matches = db.stock.filter(s=>s.qty>0 && s.itemName.toLowerCase().includes(query)).slice(0,20);
+  const matches = db.stock.filter(s=>s.qty>0 && !s.mergedInto && [s.itemName,s.id,s.sku,s.size,s.material,s.subcategory,s.category].map(v=>String(v||'').toLowerCase()).join(' ').includes(query)).slice(0,20);
   if(!matches.length){ box.innerHTML = `<div class="empty" style="padding:14px;">No matching stock found.</div>`; return; }
   box.innerHTML = matches.map(s=>`
     <div class="list-row" style="cursor:pointer;" onclick="pickStockForPReturn('${inlineValue(s.id)}')">
-      <div><div class="li-main">${escapeHtml(s.itemName)}</div><div class="li-sub">${escapeHtml(s.batch||'—')} • ${escapeHtml(stockQuantityLabel(s))} left • ${escapeHtml(s.sku)}</div></div>
+      <div><div class="li-main">${escapeHtml(s.itemName)}</div><div class="li-sub">${s.size?escapeHtml(s.size)+' • ':''}${escapeHtml(s.batch||'—')} • ${escapeHtml(stockQuantityLabel(s))} left • ${escapeHtml(s.sku)}</div></div>
       <div class="li-right" style="color:var(--clay-700);">Add +</div>
     </div>
   `).join('');
@@ -1321,7 +1321,7 @@ function renderSaleReturn(){
     return `
       <div class="card">
         <h3>Find the bill</h3>
-        <div class="field"><label>Search by bill number</label><input id="sReturnSearch" placeholder="e.g. HWS00007" oninput="renderSReturnSearchResults(this.value)"/></div>
+        <div class="field"><label>Search by bill number, customer or product</label><input id="sReturnSearch" placeholder="e.g. HWS00007, customer name, or product" oninput="renderSReturnSearchResults(this.value)"/></div>
         <div id="sReturnSearchResults"></div>
       </div>
     `;
@@ -1363,11 +1363,15 @@ function renderSReturnSearchResults(q){
   const box = document.getElementById('sReturnSearchResults');
   const query = (q||'').trim().toLowerCase();
   if(!query){ box.innerHTML=''; return; }
-  const matches = db.sales.filter(s=>(s.billNo||'').toLowerCase().includes(query) || (s.customer||'').toLowerCase().includes(query)).slice(0,8);
-  if(!matches.length){ box.innerHTML = `<div class="empty" style="padding:14px;">No matching bill found.</div>`; return; }
-  box.innerHTML = matches.map(s=>`
+  const stockById = new Map(db.stock.map(x=>[x.id,x]));
+  const productText = it => { const st = stockById.get(it.stockId)||{}; return [it.itemName,it.stockId,it.sku,st.size,st.material,st.subcategory,st.category].map(v=>String(v||'').toLowerCase()).join(' '); };
+  const matches = db.sales.map(s=>({s,lines:(s.items||[]).filter(it=>productText(it).includes(query))}))
+    .filter(m=>(m.s.billNo||'').toLowerCase().includes(query) || (m.s.customer||'').toLowerCase().includes(query) || m.lines.length)
+    .sort((a,b)=>String(b.s.date||'').localeCompare(String(a.s.date||''))||String(b.s.billNo||'').localeCompare(String(a.s.billNo||''))).slice(0,20);
+  if(!matches.length){ box.innerHTML = `<div class="empty" style="padding:14px;">No matching bill or product found.</div>`; return; }
+  box.innerHTML = matches.map(({s,lines})=>`
     <div class="list-row" style="cursor:pointer;" onclick="pickSaleForReturn('${inlineValue(s.id)}')">
-      <div><div class="li-main">${escapeHtml(s.billNo)}</div><div class="li-sub">${escapeHtml(s.date)} • ${escapeHtml(s.customer)}</div></div>
+      <div><div class="li-main">${escapeHtml(s.billNo)}</div><div class="li-sub">${escapeHtml(s.date)} • ${escapeHtml(s.customer)}</div>${lines.slice(0,3).map(it=>`<div class="li-sub">${escapeHtml(it.itemName)}${(stockById.get(it.stockId)||{}).size?' • '+escapeHtml(stockById.get(it.stockId).size):''} — ${escapeHtml(Number(it.boxQty)||0)} box + ${escapeHtml(Number(it.pieceQty)||0)} pcs</div>`).join('')}</div>
       <div class="li-right">${escapeHtml(fmt(s.totalAmount))}</div>
     </div>
   `).join('');
@@ -3867,7 +3871,7 @@ document.addEventListener('keydown', function(e){
 });
 
 /* HAMMAD WORLD reliability revision 2026-09-18. Financial amounts are INR. */
-const HW_VERSION='2026.09.24-r22-staff-quick-tiles';
+const HW_VERSION='2026.09.24-r23-return-product-search';
 let hwExpectedLocal=localStorage.getItem(DB_KEY), hwCloudReady=false, hwCloudError='', hwBusy=new Set(), hwPendingOpenings=[];
 const hwCollections=['stock','sales','purchases','saleReturns','purchaseReturns','openingStock','parties','payments','expenses','staff','staffLedger','quotations','auditLog'];
 // Staff subscribe to the shop records needed to verify deliveries and enter bills.
