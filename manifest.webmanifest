@@ -1,0 +1,16 @@
+{
+  "name": "HAMMAD WORLD",
+  "short_name": "Hammad World",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fff8f0",
+  "theme_color": "#0b4a36",
+  "icons": [
+    {
+      "src": "./icon.png",
+      "sizes": "152x152",
+      "type": "image/png"
+    }
+  ]
+}
