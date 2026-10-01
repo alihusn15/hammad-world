@@ -1,5 +1,5 @@
 /* HAMMAD WORLD static app shell only. Never cache API calls or account data. */
-const VERSION='2026.09.26-r34-live-worker';
+const VERSION='2026.10.01-r35-tablet-packing-material';
 const BASE=new URL('./',self.location.href);
 const PREFIX='hw-shell-'+BASE.pathname+'-';
 const CACHE=PREFIX+VERSION;
@@ -18,3 +18,4 @@ self.addEventListener('fetch',event=>{
  event.respondWith((async()=>{const cache=await caches.open(CACHE),key=navigation?new URL('index.html',BASE).href:new URL(url.pathname,BASE.origin).href;const saved=await cache.match(key);if(saved)return saved;return fetch(req);})());
 });
 self.addEventListener('message',event=>{if(event.data?.type==='HW_STATUS')event.waitUntil((async()=>{const cache=await caches.open(CACHE),checks=await Promise.all(FILES.map(file=>cache.match(new URL(file,BASE).href)));event.ports[0]?.postMessage({version:VERSION,ready:checks.every(Boolean)});})());});
+

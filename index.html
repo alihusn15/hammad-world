@@ -107,9 +107,12 @@
   .cloud-badge.offline{background:#4A2E0B;border-color:var(--amber-600);color:var(--amber-100);}
   .sku-chip{display:inline-block;font-size:10.5px;font-weight:700;background:var(--amber-100);color:var(--amber-600);padding:3px 8px;border-radius:7px;margin-top:4px;}
 
-  /* ===================== TABLET (768px+) — wider, roomier, same layout shape ===================== */
+  /* Tablet width: compact Android tablets can report a viewport below 768px. */
+  @media screen and (min-width: 600px) and (max-width: 1023px){
+    #app{ max-width:none; width:100%; }
+    nav.bottom{ max-width:none; width:100%; }
+  }
   @media (min-width: 768px) and (max-width: 1023px){
-    #app{ max-width:720px; }
     .stat-grid{ grid-template-columns: repeat(3, 1fr); }
     .modal-box{ max-width:560px; }
   }
@@ -140,6 +143,12 @@
     .stat-grid{ grid-template-columns: repeat(4, 1fr); }
     .modal-overlay{ align-items:center; }
     .modal-box{ max-width:600px; border-radius:18px; }
+  }
+
+  /* Wide touch tablets retain the existing sidebar layout and fill the viewport. */
+  @media screen and (min-width: 1024px) and (hover: none) and (pointer: coarse){
+    #app{ max-width:none; }
+    main{ max-width:none; min-width:0; }
   }
 
   @media print{
@@ -649,7 +658,7 @@ function renderDashboard(){
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('staffList')">👷 Staff Ledger</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('auditLog')">📋 Activity log</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="setScreen('users')">👥 Users &amp; roles</button>
-      <button class="btn btn-ghost" style="margin-top:8px;" onclick="openCategoryManager()">🏷 Manage Category & Sub-category</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="openCategoryManager()">🏷 Manage categories & material types</button>
       <button class="btn btn-ghost" style="margin-top:8px;" onclick="exportBackup()">⬇ Export Backup</button>
       <label class="btn btn-ghost" style="margin-top:8px;display:flex;">
         ⬆ Import Backup
@@ -682,7 +691,7 @@ function renderDashboard(){
 /* ===================== CATEGORY MANAGER ===================== */
 function openCategoryManager(){
   if(!requireOwner())return;
-  document.getElementById('genericModalTitle').textContent = 'Manage categories';
+  document.getElementById('genericModalTitle').textContent = 'Manage categories & material types';
   renderCategoryManagerBody();
   document.getElementById('genericModal').style.display='flex';
 }
@@ -697,7 +706,7 @@ function renderCategoryManagerBody(){
         <button class="btn btn-primary btn-sm" onclick="addCategory()">Add</button>
       </div>
     </div>
-    ${cats.map(cat=>`
+    ${cats.map((cat,index)=>`
       <div class="card" style="margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <h3 style="margin:0;">${escapeHtml(cat)}</h3>
@@ -714,6 +723,13 @@ function renderCategoryManagerBody(){
         <div style="display:flex;gap:8px;margin-top:6px;">
           <input id="newSub_${escapeHtml(cat.replace(/[^A-Za-z0-9]/g,''))}" placeholder="Add subcategory..." style="flex:1;"/>
           <button class="btn btn-ghost btn-sm" onclick="addSubcategory('${inlineValue(cat)}')">Add</button>
+        </div>
+        <div style="margin-top:14px;"><label>Material types</label>
+          ${(db.categories[cat].materials||[]).map(material=>`<span class="chip" style="display:inline-block;margin:0 6px 6px 0;">${escapeHtml(material)}</span>`).join('') || '<p class="step">No material types yet.</p>'}
+          <div style="display:flex;gap:8px;">
+            <input id="newMaterial_${index}" placeholder="Add material type..." aria-label="New material type for ${escapeHtml(cat)}" style="flex:1;min-width:0;"/>
+            <button class="btn btn-ghost btn-sm" onclick="addMaterialType('${inlineValue(cat)}',${index})">Add</button>
+          </div>
         </div>
       </div>
     `).join('')}
@@ -815,7 +831,7 @@ function renderPurchase(){
       <div id="stockSuggest_purchase_${escapeHtml(idx)}"></div>
       <div class="row2">
         <div class="field"><label>Category</label>
-          <select onchange="updatePurchaseItem(${inlineValue(idx)},'category',this.value); updatePurchaseItem(${inlineValue(idx)},'subcategory',''); render();">
+          <select onchange="updatePurchaseItem(${inlineValue(idx)},'category',this.value); updatePurchaseItem(${inlineValue(idx)},'subcategory',''); updatePurchaseItem(${inlineValue(idx)},'material',''); render();">
             <option value="">Select</option>
             ${cats.map(c=>`<option value="${escapeHtml(c)}" ${escapeHtml(it.category===c?'selected':'')}>${escapeHtml(c)}</option>`).join('')}
           </select>
@@ -827,12 +843,13 @@ function renderPurchase(){
           </select>
         </div>
       </div>
-      ${mats.length ? `<div class="field"><label>Material</label>
+      ${`<div class="field"><label>Material type${mats.length?'':' (optional)'}</label>
         <select onchange="updatePurchaseItem(${inlineValue(idx)},'material',this.value)">
-          <option value="">Select</option>
+          <option value="">${mats.length?'Select':'Not specified'}</option>
           ${mats.map(m=>`<option value="${escapeHtml(m)}" ${escapeHtml(it.material===m?'selected':'')}>${escapeHtml(m)}</option>`).join('')}
         </select>
-      </div>` : ''}
+        ${isOwner()?`<button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="openCategoryManager()">Add material type</button>`:(!mats.length?'<p class="step">The owner can add material types for this category.</p>':'')}
+      </div>`}
       <div class="row2">
         <div class="field"><label>Size</label><input value="${escapeHtml(it.size)}" oninput="updatePurchaseItem(${inlineValue(idx)},'size',this.value)" placeholder="e.g. 12x18 inch"/></div>
         <div class="field"><label>Brand (optional)</label><input value="${escapeHtml(it.brand)}" oninput="updatePurchaseItem(${inlineValue(idx)},'brand',this.value)"/></div>
@@ -1050,7 +1067,7 @@ function renderOpeningStock(){
       <div id="stockSuggest_opening_${escapeHtml(idx)}"></div>
       <div class="row2">
         <div class="field"><label>Category</label>
-          <select onchange="updateOpeningStockItem(${inlineValue(idx)},'category',this.value); updateOpeningStockItem(${inlineValue(idx)},'subcategory',''); render();">
+          <select onchange="updateOpeningStockItem(${inlineValue(idx)},'category',this.value); updateOpeningStockItem(${inlineValue(idx)},'subcategory',''); updateOpeningStockItem(${inlineValue(idx)},'material',''); render();">
             <option value="">Select</option>
             ${cats.map(c=>`<option value="${escapeHtml(c)}" ${escapeHtml(it.category===c?'selected':'')}>${escapeHtml(c)}</option>`).join('')}
           </select>
@@ -1062,12 +1079,13 @@ function renderOpeningStock(){
           </select>
         </div>
       </div>
-      ${mats.length ? `<div class="field"><label>Material</label>
+      ${`<div class="field"><label>Material type${mats.length?'':' (optional)'}</label>
         <select onchange="updateOpeningStockItem(${inlineValue(idx)},'material',this.value)">
-          <option value="">Select</option>
+          <option value="">${mats.length?'Select':'Not specified'}</option>
           ${mats.map(m=>`<option value="${escapeHtml(m)}" ${escapeHtml(it.material===m?'selected':'')}>${escapeHtml(m)}</option>`).join('')}
         </select>
-      </div>` : ''}
+        ${isOwner()?`<button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="openCategoryManager()">Add material type</button>`:(!mats.length?'<p class="step">The owner can add material types for this category.</p>':'')}
+      </div>`}
       <div class="row2">
         <div class="field"><label>Size</label><input value="${escapeHtml(it.size)}" oninput="updateOpeningStockItem(${inlineValue(idx)},'size',this.value)"/></div>
         <div class="field"><label>Batch/Shade (optional)</label><input value="${escapeHtml(it.batch)}" oninput="updateOpeningStockItem(${inlineValue(idx)},'batch',this.value);"/></div>
@@ -3923,7 +3941,7 @@ document.addEventListener('keydown', function(e){
 });
 
 /* HAMMAD WORLD reliability revision 2026-09-18. Financial amounts are INR. */
-const HW_VERSION='2026.09.26-r34-live-worker';
+const HW_VERSION='2026.10.01-r35-tablet-packing-material';
 let hwExpectedLocal=localStorage.getItem(DB_KEY), hwCloudReady=false, hwCloudError='', hwBusy=new Set(), hwPendingOpenings=[];
 const hwCollections=['stock','sales','purchases','saleReturns','purchaseReturns','openingStock','parties','payments','expenses','staff','staffLedger','quotations','auditLog'];
 // Staff subscribe to the shop records needed to verify deliveries and enter bills.
@@ -3972,9 +3990,9 @@ function assertTxnSize(ids){if(ids.length>400)throw Error('Split this entry into
 async function hwCommitSale(draft,scope=null){
  const assertSession=()=>{if(scope!==null&&scope!==hwQueueScope())throw Error('Account changed. Sign in with the original account to reconcile this sale.');};assertSession();
  const d=clone(draft);try{checkSale(d.items);validateCommonDraft(d);if(d.fromQuoteId&&!canPerform('quotation'))throw Error('Quotation conversion is restricted to approved accounts.');d.items=ensureLines(d.items);for(const it of d.items){const s=stockById(it.stockId);if(!s)throw Error('Product no longer exists.');it.stockId=s.id;}}catch(e){e.notDispatched=true;throw e;}const totals=saleTotals(d.items,d),needs=aggregateSaleNeeds(d.items);if(!draft.operationId)draft.operationId=uid();const operationId=draft.operationId;let saved;
- if(CLOUD_MODE&&!isServerOwner()){saved=await hwStaffCall('/staff/sale',{operationId,items:d.items.map(it=>({stockId:it.stockId,boxQty:it.boxQty,pieceQty:it.pieceQty,boxPrice:it.boxPrice,piecePrice:it.piecePrice,discount:it.discount,gst:it.gst,lineId:it.lineId})),billDiscount:d.billDiscount,billDiscountPct:d.billDiscountPct,amountPaid:d.amountPaid,additionalCharges:d.additionalCharges,partyId:d.partyId,gstMode:d.gstMode,customer:d.customer,paidInFull:d.paidInFull,fromQuoteId:d.fromQuoteId,actorName:d._queuedActor||hwCurrentActor||currentUserEmail},scope===null?{}:{scope,timeoutMs:30000});}
- else if(CLOUD_MODE){const billNo=await nextBillNoCloud('sale'),ref=fsDB.collection('sales').doc(operationId);assertSession();await fsDB.runTransaction(async tx=>{assertSession();const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),quoteRef=d.fromQuoteId?fsDB.collection('quotations').doc(d.fromQuoteId):null;const [existing,snaps,quoteSnap]=await Promise.all([tx.get(ref),Promise.all(refs.map(r=>tx.get(r))),quoteRef?tx.get(quoteRef):Promise.resolve(null)]);if(existing.exists){saved={id:ref.id,...existing.data()};return;}if(quoteRef&&(!quoteSnap.exists||quoteSnap.data().status==='converted'))throw Error('This quotation is already converted or missing.');assertSession();const info={};snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Not enough stock; reload the product list.');info[ids[i]]=s.data();});d.items.forEach(it=>it.costAtSale=avgOf(info[it.stockId]));saved={id:ref.id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId,sourceQuoteId:d.fromQuoteId||null,...actorFields(),stockChanges:stockChanges(needs,-1),createdAt:firebase.firestore.FieldValue.serverTimestamp()};refs.forEach((r,i)=>tx.update(r,staffStockUpdate(info[ids[i]].qty-needs[ids[i]],operationId,'sales')));tx.set(ref,saved);if(quoteRef)tx.update(quoteRef,{status:'converted',convertedToBill:billNo,convertedSaleId:operationId});});}
- else localCommit(state=>{if(d.fromQuoteId){const q=state.quotations.find(q=>q.id===d.fromQuoteId);if(!q||q.status==='converted')throw Error('This quotation is already converted or missing.');}for(const [id,need]of Object.entries(needs)){if(stockById(id,state).qty<need)throw Error('Not enough stock for this sale.');}d.items.forEach(it=>it.costAtSale=avgOf(stockById(it.stockId,state)));const id=nextId('SAL'),billNo=nextBillNo('sale');saved={id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId,sourceQuoteId:d.fromQuoteId||null};for(const [sid,need]of Object.entries(needs))Object.assign(stockById(sid,state),{qty:stockById(sid,state).qty-need,_hasDownstream:true});state.sales.push(saved);if(d.fromQuoteId)Object.assign(state.quotations.find(q=>q.id===d.fromQuoteId),{status:'converted',convertedToBill:billNo,convertedSaleId:id});auditIn(state,'Sale created',billNo);});
+ if(CLOUD_MODE&&!isServerOwner()){saved=await hwStaffCall('/staff/sale',{operationId,items:d.items.map(it=>({stockId:it.stockId,expectedPiecesPerBox:it.piecesPerBox,boxQty:it.boxQty,pieceQty:it.pieceQty,boxPrice:it.boxPrice,piecePrice:it.piecePrice,discount:it.discount,gst:it.gst,lineId:it.lineId})),billDiscount:d.billDiscount,billDiscountPct:d.billDiscountPct,amountPaid:d.amountPaid,additionalCharges:d.additionalCharges,partyId:d.partyId,gstMode:d.gstMode,customer:d.customer,paidInFull:d.paidInFull,fromQuoteId:d.fromQuoteId,actorName:d._queuedActor||hwCurrentActor||currentUserEmail},scope===null?{}:{scope,timeoutMs:30000});}
+ else if(CLOUD_MODE){const billNo=await nextBillNoCloud('sale'),ref=fsDB.collection('sales').doc(operationId);assertSession();await fsDB.runTransaction(async tx=>{assertSession();const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),quoteRef=d.fromQuoteId?fsDB.collection('quotations').doc(d.fromQuoteId):null;const [existing,snaps,quoteSnap]=await Promise.all([tx.get(ref),Promise.all(refs.map(r=>tx.get(r))),quoteRef?tx.get(quoteRef):Promise.resolve(null)]);if(existing.exists){saved={id:ref.id,...existing.data()};return;}if(quoteRef&&(!quoteSnap.exists||quoteSnap.data().status==='converted'))throw Error('This quotation is already converted or missing.');assertSession();const info={};snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Not enough stock; reload the product list.');info[ids[i]]=s.data();});d.items.forEach(it=>{assertCurrentPacking(it,info[it.stockId]);it.costAtSale=avgOf(info[it.stockId]);});saved={id:ref.id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId,sourceQuoteId:d.fromQuoteId||null,...actorFields(),stockChanges:stockChanges(needs,-1),createdAt:firebase.firestore.FieldValue.serverTimestamp()};refs.forEach((r,i)=>tx.update(r,staffStockUpdate(info[ids[i]].qty-needs[ids[i]],operationId,'sales')));tx.set(ref,saved);if(quoteRef)tx.update(quoteRef,{status:'converted',convertedToBill:billNo,convertedSaleId:operationId});});}
+ else localCommit(state=>{if(d.fromQuoteId){const q=state.quotations.find(q=>q.id===d.fromQuoteId);if(!q||q.status==='converted')throw Error('This quotation is already converted or missing.');}for(const [id,need]of Object.entries(needs)){if(stockById(id,state).qty<need)throw Error('Not enough stock for this sale.');}d.items.forEach(it=>{assertCurrentPacking(it,stockById(it.stockId,state));it.costAtSale=avgOf(stockById(it.stockId,state));});const id=nextId('SAL'),billNo=nextBillNo('sale');saved={id,billNo,date:todayStr(),customer:d.customer||'Walk-in',partyId:d.partyId||null,items:d.items,gstMode:d.gstMode,additionalCharges:d.additionalCharges||[],...totals,amountPaid:d.partyId&&d.paidInFull===false?amount(d.amountPaid||0):totals.totalAmount,rev:0,_returnedByLine:{},_returnSeeded:true,operationId,sourceQuoteId:d.fromQuoteId||null};for(const [sid,need]of Object.entries(needs))Object.assign(stockById(sid,state),{qty:stockById(sid,state).qty-need,_hasDownstream:true});state.sales.push(saved);if(d.fromQuoteId)Object.assign(state.quotations.find(q=>q.id===d.fromQuoteId),{status:'converted',convertedToBill:billNo,convertedSaleId:id});auditIn(state,'Sale created',billNo);});
  assertSession();return saved;
 }
 async function saveSale(){return guarded('sale',async()=>{
@@ -4044,7 +4062,7 @@ async function saveOpeningStockCloud(){return saveOpeningStock();}
 function importOpeningStockCsv(file){if(!file)return;const reader=new FileReader();reader.onload=()=>guarded('opening',async()=>{const rows=parseCsv(reader.result);if(rows.length<2)throw Error('The CSV needs a header and item rows.');const items=rows.slice(1).filter(r=>r.some(v=>String(v).trim())).map((r,i)=>{if(r.length<9)throw Error('CSV row '+(i+2)+' is incomplete. Nothing was imported.');return openingCsvItem(r,i+2);});checkPurchase(items,true);await ensureOpeningNumbers();if(!confirm('Import all '+items.length+' rows as opening stock?'))return;if(CLOUD_MODE)await applyOpeningStockItemsCloud(items);else localCommit(state=>{const valid=applyOpeningStockItemsLocal(items);state.openingStock.push({id:nextId('OPS'),openingNo:nextBillNo('opening'),date:todayStr(),items:valid,status:'completed',rev:0});auditIn(state,'Opening CSV imported',items.length+' lines');});alert('All '+items.length+' rows imported.');setScreen('stock');});reader.onerror=()=>alert('Could not read the CSV.');reader.readAsText(file);}
 function hasDownstream(id){return db.sales.some(s=>s.items?.some(it=>it.stockId===id))||db.saleReturns.some(s=>s.items?.some(it=>it.stockId===id))||db.purchaseReturns.some(s=>s.items?.some(it=>it.stockId===id));}
 function economicGroups(rec,opening=false){const items=rec.items;const values=opening?items.map(it=>gstBreakdown(incomingAmount(it,'cost'),Number(it.gst)||0,'included').taxable):purchaseTotals(items,rec).landed;return groupedIncoming(items,values);}
-function billReplacement(current,draft,stocks,type){const isPurchase=type==='purchase'||type==='opening';const next={...clone(current),items:clone(draft),rev:(current.rev||0)+1};const updates={};if(isPurchase){checkPurchase(draft,type==='opening');for(const it of next.items){const old=current.items.find(row=>row.sku===it.sku);if(!old||Number(old.piecesPerBox)!==Number(it.piecesPerBox))throw Error('Product and box size cannot be changed on a saved purchase.');}const before=economicGroups(current,type==='opening'),after=economicGroups(next,type==='opening');for(const id of new Set([...Object.keys(before),...Object.keys(after)])){const s=stocks[id];if(!s||s.mergedInto)throw Error('A product was removed or merged. Use an explicit stock correction.');const a=before[id]||{qty:0,value:0},b=after[id]||{qty:0,value:0};if((a.qty!==b.qty||Math.abs(a.value-b.value)>0.001)&&(s._hasDownstream||hasDownstream(id)||(CLOUD_MODE&&!s._historyTracked)))throw Error('This stock has sales/returns or unverified older cloud history. Historical purchase/opening quantities and cost are locked; use an appropriate documented correction.');const qty=s.qty-a.qty+b.qty,value=s.qty*avgOf(s)-a.value+b.value;if(qty<0||value<-0.01)throw Error('This change would make stock or valuation negative.');updates[id]={qty,avgCost:qty>0?Math.max(0,value)/qty:0};}if(type==='purchase'){const t=purchaseTotals(next.items,next);delete t.landed;Object.assign(next,t);}}
+function billReplacement(current,draft,stocks,type){const isPurchase=type==='purchase'||type==='opening';const next={...clone(current),items:clone(draft),rev:(current.rev||0)+1};const updates={},packingChanges=isPurchase?packingReplacementUpdates(current,draft,stocks,type):{};if(isPurchase){checkPurchase(draft,type==='opening');for(const it of next.items){const old=current.items.find(row=>row.sku===it.sku);if(!old)throw Error('Product cannot be changed on a saved purchase.');}const before=economicGroups(current,type==='opening'),after=economicGroups(next,type==='opening');for(const id of new Set([...Object.keys(before),...Object.keys(after)])){const s=stocks[id];if(!s||s.mergedInto)throw Error('A product was removed or merged. Use an explicit stock correction.');const a=before[id]||{qty:0,value:0},b=after[id]||{qty:0,value:0};if((a.qty!==b.qty||Math.abs(a.value-b.value)>0.001)&&(s._hasDownstream||hasDownstream(id)||(CLOUD_MODE&&!s._historyTracked)))throw Error('This stock has sales/returns or unverified older cloud history. Historical purchase/opening quantities and cost are locked; use an appropriate documented correction.');const qty=s.qty-a.qty+b.qty,value=s.qty*avgOf(s)-a.value+b.value;if(qty<0||value<-0.01)throw Error('This change would make stock or valuation negative.');updates[id]={qty,avgCost:qty>0?Math.max(0,value)/qty:0,...(packingChanges[id]||{})};}if(Object.keys(packingChanges).length){next.stockChanges=Object.fromEntries(Object.entries(after).map(([id,g])=>[id,g.qty]));next.stockValues=Object.fromEntries(Object.entries(after).map(([id,g])=>[id,g.value]));}if(type==='purchase'){const t=purchaseTotals(next.items,next);delete t.landed;Object.assign(next,t);}}
  else{checkSale(draft);if(linkedReturns(current).length||Object.values(current._returnedByLine||{}).some(n=>n>0))throw Error('This sale has returns. Its quantities and prices are locked to preserve the credit history.');
  const original=ensureLines(current.items);next.items=ensureLines(next.items);
  for(const line of next.items){const old=original.find(it=>it.lineId===line.lineId);const stock=stocks[line.stockId];if(!stock||stock.mergedInto)throw Error('Stock changed. Reopen this bill.');if(old&&(old.stockId!==line.stockId||Number(old.piecesPerBox)!==Number(line.piecesPerBox)))throw Error('Product and box size cannot be changed on a saved sale.');if(old&&old.costAtSale==null)throw Error('This older sale has no recorded cost. Reconcile it before editing.');const n=units(line),prior=old?units(old):0;line.costAtSale=old?(Math.min(n,prior)*old.costAtSale+Math.max(0,n-prior)*avgOf(stock))/n:avgOf(stock);}
@@ -4067,8 +4085,8 @@ function openOpeningStockDetail(id){const rec=db.openingStock.find(o=>o.id===id)
 function updateOpeningDetailItem(idx,field,val){const it=openingDetailCtx.draftItems[idx];if(it)it[field]=['itemName','batch','category','subcategory','material','size'].includes(field)?val:Number(val);}
 async function saveOpeningStockEdits(){return guarded('openingEdit',async()=>{if(!isOwner())throw Error('Only owners may edit opening stock.');const ctx=clone(openingDetailCtx);checkPurchase(ctx.draftItems,true);let saved;if(CLOUD_MODE){const ref=fsDB.collection('openingStock').doc(ctx.id);await fsDB.runTransaction(async tx=>{const snap=await tx.get(ref);if(!snap.exists)throw Error('Entry missing.');const rec={id:ref.id,...snap.data()};if(rec.status==='pending'||(rec.rev||0)!==ctx.baseRev)throw Error('Entry changed or unfinished. Reopen it.');const ids=[...new Set([...rec.items,...ctx.draftItems].map(it=>it.sku))];assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(safeId(id))),snaps=await Promise.all(refs.map(r=>tx.get(r))),stocks=Object.fromEntries(ids.map((id,i)=>[id,snaps[i].exists?snaps[i].data():null]));const result=billReplacement(rec,ctx.draftItems,stocks,'opening');saved=result.record;ids.forEach((id,i)=>tx.update(refs[i],result.updates[id]));tx.set(ref,saved);tx.set(fsDB.collection('auditLog').doc(uid()),{action:'Opening stock edited',detail:rec.openingNo||rec.id,role:serverRole,at:new Date().toISOString(),changes:openingEditAuditChanges(rec.items,saved.items),createdAt:firebase.firestore.FieldValue.serverTimestamp()});});upsert('openingStock',saved);}else localCommit(state=>{const rec=state.openingStock.find(r=>r.id===ctx.id);if(!rec||rec.status==='pending'||(rec.rev||0)!==ctx.baseRev)throw Error('Entry changed or unfinished. Reopen it.');const stocks=Object.fromEntries(state.stock.map(s=>[s.id,s])),result=billReplacement(rec,ctx.draftItems,stocks,'opening');for(const [id,v]of Object.entries(result.updates))Object.assign(stocks[id],v);saved=result.record;state.openingStock[state.openingStock.indexOf(rec)]=saved;auditIn(state,'Opening stock edited',rec.openingNo||rec.id);Object.assign(state.auditLog[state.auditLog.length-1],{changes:openingEditAuditChanges(rec.items,saved.items)});});syncCatalogItem();alert('Opening stock and valuation saved together.');setScreen('fullLedger');});}
 async function mergeDuplicates(idsCsv){return guarded('merge',async()=>{if(!isOwner())throw Error('Only owners may merge products.');const ids=[...new Set(idsCsv.split(','))];if(ids.length<2)return;if(!confirm('Merge these products, preserving their combined quantity and cost?'))return;const combine=items=>{if(items.some(s=>!s||s.mergedInto))throw Error('A product has already been merged. Reload.');if(items.some(s=>s.piecesPerBox!==items[0].piecesPerBox))throw Error('Cannot merge different box sizes.');const primary=items.reduce((a,b)=>a.qty>=b.qty?a:b),qty=items.reduce((n,s)=>n+s.qty,0),value=items.reduce((n,s)=>n+s.qty*avgOf(s),0);return {primary,qty,avgCost:qty?value/qty:avgOf(primary)};};if(CLOUD_MODE){await fsDB.runTransaction(async tx=>{const refs=ids.map(id=>fsDB.collection('stock').doc(safeId(id))),snaps=await Promise.all(refs.map(r=>tx.get(r))),items=snaps.map((s,i)=>s.exists?{id:ids[i],...s.data()}:null),g=combine(items);items.forEach((s,i)=>tx.update(refs[i],s.id===g.primary.id?{qty:g.qty,avgCost:g.avgCost,_hasDownstream:true}:{qty:0,mergedInto:g.primary.id,discontinued:true}));});}else localCommit(state=>{const items=ids.map(id=>state.stock.find(s=>s.id===id)),g=combine(items);items.forEach(s=>Object.assign(s,s.id===g.primary.id?{qty:g.qty,avgCost:g.avgCost,_hasDownstream:true}:{qty:0,mergedInto:g.primary.id,discontinued:true}));auditIn(state,'Products merged',ids.join(', '));});syncCatalogItem();alert('Products merged.');render();});}
-async function savePurchaseReturn(){return guarded('purchaseReturn',async()=>{const d=clone(purchaseReturnDraft);for(const it of d.items){numeric(it.qty,'Return quantity');numeric(it.rate,'Return rate');numeric(it.gst||0,'GST',0,100);units({...it,freeQty:0,freePieceQty:0},'purchase');}const items=d.items.filter(it=>incomingPaidUnits(it)>0);if(!items.length)throw Error('Enter a positive return quantity.');if(d.partyId&&!db.parties.some(p=>p.id===d.partyId&&p.type==='supplier'))throw Error('Select an existing supplier.');items.forEach(it=>{const s=stockById(it.stockId);if(!s)throw Error('Product missing.');it.stockId=s.id;});if(!purchaseReturnDraft.operationId)purchaseReturnDraft.operationId=uid();const operationId=purchaseReturnDraft.operationId,needs=Object.create(null);let totalAmount=0,totalGst=0;items.forEach(it=>{needs[it.stockId]=(needs[it.stockId]||0)+units({...it,freeQty:0,freePieceQty:0},'purchase');const br=gstBreakdown(incomingAmount(it),Number(it.gst||0),d.gstMode);totalAmount+=br.taxable;totalGst+=br.gst;});let saved;const fields={date:todayStr(),partyId:d.partyId||null,items,gstMode:d.gstMode,totalAmount:amount(totalAmount),totalGst:amount(totalGst),operationId};if(CLOUD_MODE&&!isServerOwner()){saved=await hwStaffCall('/staff/purchaseReturn',{operationId,partyId:d.partyId,gstMode:d.gstMode,items:items.map(it=>({stockId:it.stockId,qty:it.qty,pieceQty:it.pieceQty,rate:it.rate,gst:it.gst})),actorName:hwCurrentActor||currentUserEmail});upsert('purchaseReturns',saved);}
- else if(CLOUD_MODE){const ref=fsDB.collection('purchaseReturns').doc(operationId),billNo=await nextBillNoCloud('purchase');await fsDB.runTransaction(async tx=>{const done=await tx.get(ref);if(done.exists){saved={id:ref.id,...done.data()};return;}const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),snaps=await Promise.all(refs.map(r=>tx.get(r)));snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Return exceeds current stock.');});const inventoryCost=ids.reduce((sum,id,i)=>sum+needs[id]*avgOf(snaps[i].data()),0);snaps.forEach((s,i)=>tx.update(refs[i],staffStockUpdate(s.data().qty-needs[ids[i]],operationId,'purchaseReturns')));saved={id:ref.id,billNo,...fields,inventoryCost,...actorFields(),stockChanges:stockChanges(needs,-1),createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.set(ref,saved);});upsert('purchaseReturns',saved);}else localCommit(state=>{for(const [id,n]of Object.entries(needs)){const s=stockById(id,state);if(!s||s.qty<n)throw Error('Return exceeds current stock.');}const inventoryCost=Object.entries(needs).reduce((sum,[id,n])=>sum+n*avgOf(stockById(id,state)),0);for(const [id,n]of Object.entries(needs))Object.assign(stockById(id,state),{qty:stockById(id,state).qty-n,_hasDownstream:true});saved={id:nextId('PRET'),billNo:nextBillNo('purchase'),...fields,inventoryCost};state.purchaseReturns.push(saved);auditIn(state,'Purchase return',saved.billNo);});purchaseReturnDraft={gstMode:'excluded',partyId:null,items:[]};syncCatalogItem();openPrintPreview('purchaseReturn',saved.id);});}
+async function savePurchaseReturn(){return guarded('purchaseReturn',async()=>{const d=clone(purchaseReturnDraft);for(const it of d.items){numeric(it.qty,'Return quantity');numeric(it.rate,'Return rate');numeric(it.gst||0,'GST',0,100);units({...it,freeQty:0,freePieceQty:0},'purchase');}const items=d.items.filter(it=>incomingPaidUnits(it)>0);if(!items.length)throw Error('Enter a positive return quantity.');if(d.partyId&&!db.parties.some(p=>p.id===d.partyId&&p.type==='supplier'))throw Error('Select an existing supplier.');items.forEach(it=>{const s=stockById(it.stockId);if(!s)throw Error('Product missing.');it.stockId=s.id;});if(!purchaseReturnDraft.operationId)purchaseReturnDraft.operationId=uid();const operationId=purchaseReturnDraft.operationId,needs=Object.create(null);let totalAmount=0,totalGst=0;items.forEach(it=>{needs[it.stockId]=(needs[it.stockId]||0)+units({...it,freeQty:0,freePieceQty:0},'purchase');const br=gstBreakdown(incomingAmount(it),Number(it.gst||0),d.gstMode);totalAmount+=br.taxable;totalGst+=br.gst;});let saved;const fields={date:todayStr(),partyId:d.partyId||null,items,gstMode:d.gstMode,totalAmount:amount(totalAmount),totalGst:amount(totalGst),operationId};if(CLOUD_MODE&&!isServerOwner()){saved=await hwStaffCall('/staff/purchaseReturn',{operationId,partyId:d.partyId,gstMode:d.gstMode,items:items.map(it=>({stockId:it.stockId,expectedPiecesPerBox:it.piecesPerBox,qty:it.qty,pieceQty:it.pieceQty,rate:it.rate,gst:it.gst})),actorName:hwCurrentActor||currentUserEmail});upsert('purchaseReturns',saved);}
+ else if(CLOUD_MODE){const ref=fsDB.collection('purchaseReturns').doc(operationId),billNo=await nextBillNoCloud('purchase');await fsDB.runTransaction(async tx=>{const done=await tx.get(ref);if(done.exists){saved={id:ref.id,...done.data()};return;}const ids=Object.keys(needs);assertTxnSize(ids);const refs=ids.map(id=>fsDB.collection('stock').doc(id)),snaps=await Promise.all(refs.map(r=>tx.get(r)));snaps.forEach((s,i)=>{if(!s.exists||s.data().mergedInto||s.data().qty<needs[ids[i]])throw Error('Return exceeds current stock.');items.filter(it=>it.stockId===ids[i]).forEach(it=>assertCurrentPacking(it,s.data()));});const inventoryCost=ids.reduce((sum,id,i)=>sum+needs[id]*avgOf(snaps[i].data()),0);snaps.forEach((s,i)=>tx.update(refs[i],staffStockUpdate(s.data().qty-needs[ids[i]],operationId,'purchaseReturns')));saved={id:ref.id,billNo,...fields,inventoryCost,...actorFields(),stockChanges:stockChanges(needs,-1),createdAt:firebase.firestore.FieldValue.serverTimestamp()};tx.set(ref,saved);});upsert('purchaseReturns',saved);}else localCommit(state=>{for(const [id,n]of Object.entries(needs)){const s=stockById(id,state);if(!s||s.qty<n)throw Error('Return exceeds current stock.');items.filter(it=>it.stockId===id).forEach(it=>assertCurrentPacking(it,s));}const inventoryCost=Object.entries(needs).reduce((sum,[id,n])=>sum+n*avgOf(stockById(id,state)),0);for(const [id,n]of Object.entries(needs))Object.assign(stockById(id,state),{qty:stockById(id,state).qty-n,_hasDownstream:true});saved={id:nextId('PRET'),billNo:nextBillNo('purchase'),...fields,inventoryCost};state.purchaseReturns.push(saved);auditIn(state,'Purchase return',saved.billNo);});purchaseReturnDraft={gstMode:'excluded',partyId:null,items:[]};syncCatalogItem();openPrintPreview('purchaseReturn',saved.id);});}
 async function savePurchaseReturnCloud(){return savePurchaseReturn();}
 async function saveStockAdjustment(stockId){return guarded('stockAdjust',async()=>{if(!isOwner())throw Error('Only owners may correct stock.');const original=stockById(stockId);if(!original)throw Error('Product missing.');const qty=units({piecesPerBox:original.piecesPerBox,boxQty:document.getElementById('adjustBoxes').value,pieceQty:document.getElementById('adjustPieces').value}),reason=document.getElementById('adjustReason').value,note=document.getElementById('adjustNote').value.trim(),old=original.qty;if(qty===old)return;if(!confirm('Correct '+original.itemName+' from '+old+' to '+qty+' pieces?'))return;if(CLOUD_MODE){const ref=fsDB.collection('stock').doc(original.id),audit=fsDB.collection('auditLog').doc(uid());await fsDB.runTransaction(async tx=>{const snap=await tx.get(ref);if(!snap.exists||snap.data().qty!==old||snap.data().mergedInto)throw Error('Stock changed on another device. Reload before correcting it.');tx.update(ref,{qty,_hasDownstream:true});tx.set(audit,{action:'Stock corrected',detail:original.id+' '+old+' → '+qty+' '+reason+' '+note,role:serverRole,at:new Date().toISOString(),createdAt:firebase.firestore.FieldValue.serverTimestamp()});});}else localCommit(state=>{Object.assign(stockById(original.id,state),{qty,_hasDownstream:true});auditIn(state,'Stock corrected',original.id+' '+old+' → '+qty+' '+reason+' '+note);});syncCatalogItem();alert('Stock correction saved.');render();});}
 async function saveStaffEntry(staffId){return guarded('staffEntry',async()=>{if(!isOwner())throw Error('Only owners may record salary entries.');const type=document.getElementById('staffEntryType').value,amountValue=numeric(document.getElementById('staffEntryAmount').value,'Amount',0.01),date=document.getElementById('staffEntryDate').value,note=document.getElementById('staffEntryNote').value.trim();if(!['due','payment','advance'].includes(type)||!/^\d{4}-\d{2}-\d{2}$/.test(date))throw Error('Select a valid date and entry type.');if(!db.staff.some(s=>s.id===staffId))throw Error('Staff member missing.');const id=uid(),entry={id,staffId,type,amount:amount(amountValue),date,note},expense={id:'salary-'+id,date,category:'Staff Salary',amount:amount(amountValue),billRef:id,note:'Salary paid to '+db.staff.find(s=>s.id===staffId).name};if(CLOUD_MODE){const batch=fsDB.batch();batch.set(fsDB.collection('staffLedger').doc(id),{...entry,createdAt:firebase.firestore.FieldValue.serverTimestamp()});if(type==='payment')batch.set(fsDB.collection('expenses').doc(expense.id),{...expense,createdAt:firebase.firestore.FieldValue.serverTimestamp()});await batch.commit();}else localCommit(state=>{state.staffLedger.push(entry);if(type==='payment')state.expenses.push(expense);auditIn(state,'Staff entry',type+' '+amountValue);});document.getElementById('staffEntryAmount').value='';render();});}
@@ -4372,7 +4390,25 @@ function updateIncomingField(kind,idx,field,value){
  const p=Number(it.piecesPerBox)||1,piece=incomingMode(it)==='piece';
  if(['rate','cost','mrp'].includes(field))it[field]=Number(value)*(piece?p:1);
  else if(field==='piecesPerBox'){
-  if(it.sku||kind.endsWith('Edit')||kind==='return')return;
+  if(kind.endsWith('Edit')){
+   const record=savedPackingContext(kind),stock=stockById(it.sku),reason=packingEditReason(record,it,stock);
+   if(reason){alert(reason);return;}
+   const next=Number(value);
+   for(const row of incomingDraft(kind).filter(row=>row.sku===it.sku)){
+    const old=Number(row.piecesPerBox)||1;
+    if(incomingMode(row)==='piece'&&next>0)for(const k of ['rate','cost','mrp'])if(row[k]!=null)row[k]=Number(row[k])/old*next;
+    row.piecesPerBox=next;
+   }
+   incomingDraft(kind).forEach((row,i)=>{
+    if(row.sku!==it.sku)return;
+    for(const key of ['piecesPerBox','rate','cost','mrp']){
+     const input=document.getElementById('incoming_'+kind+'_'+i+'_'+key);
+     if(input&&input!==document.activeElement)input.value=entryNumber(key==='piecesPerBox'?row[key]:Number(row[key]||0)/(incomingMode(row)==='piece'?(Number(row.piecesPerBox)||1):1));
+    }
+   });
+   refreshIncomingSummary(kind);return;
+  }
+  if(it.sku||kind==='return')return;
   // Editing a packing factor in piece mode preserves the entered per-piece rates.
   const next=Number(value);if(piece&&next>0)for(const k of ['rate','cost','mrp'])if(it[k]!=null)it[k]=Number(it[k])/p*next;
   it.piecesPerBox=next;
@@ -4382,12 +4418,14 @@ function updateIncomingField(kind,idx,field,value){
 function renderIncomingFields(it,idx,kind){
  setIncomingMode(it,incomingMode(it));
  const mode=incomingMode(it),piece=mode==='piece',mixed=mode==='mixed',opening=kind.startsWith('opening'),edit=kind.endsWith('Edit'),isReturn=kind==='return';
- const p=Number(it.piecesPerBox)||1,rateKey=opening?'cost':'rate',unit=piece?'piece':'box',locked=!!it.sku||edit||isReturn;
+ const packingReason=edit?packingEditReason(savedPackingContext(kind),it,stockById(it.sku)):'';
+ const p=Number(it.piecesPerBox)||1,rateKey=opening?'cost':'rate',unit=piece?'piece':'box',locked=edit?!!packingReason:!!it.sku||isReturn;
  // Historical one-piece products are shown naturally without rewriting their saved lines.
  const paid=Number(it.qty||0)*p+Number(it.pieceQty||0),free=Number(it.freeQty||0)*p+Number(it.freePieceQty||0);
  const field=(label,key,value,readOnly=false)=>`<div class="field"><label for="incoming_${kind}_${idx}_${key}">${label}</label><input id="incoming_${kind}_${idx}_${key}" data-incoming-kind="${kind}" data-incoming-field="${key}" type="number" min="0" step="${['qty','pieceQty','freeQty','freePieceQty','piecesPerBox'].includes(key)?'1':'any'}" value="${escapeHtml(entryNumber(value))}" ${readOnly?'readonly':''} oninput="updateIncomingField('${kind}',${idx},'${key}',this.value)"></div>`;
  return `<div class="field"><label for="incoming_${kind}_${idx}_unit">Entry unit</label><select id="incoming_${kind}_${idx}_unit" onchange="changeIncomingMode('${kind}',${idx},this.value)">${[['box','Box'],['piece','Piece'],['mixed','Box + loose pieces']].map(([v,t])=>`<option value="${v}" ${mode===v?'selected':''}>${t}</option>`).join('')}</select></div>
- ${piece&&p===1?'<div class="step">Individual pieces — no box quantity required.</div>':field('Pieces per box'+(locked?' (fixed)':''),'piecesPerBox',it.piecesPerBox||'',locked)}
+ ${piece&&p===1&&!edit?'<div class="step">Individual pieces — no box quantity required.</div>':field('Qty per box (pieces)'+(locked?' (fixed)':''),'piecesPerBox',it.piecesPerBox||'',locked)}
+ ${edit?`<p class="step">${escapeHtml(packingReason||'Correct packing here and save. Stock quantity and average cost update together from this saved entry.')}</p>`:''}
  <div class="row2">${field((opening?'Opening':isReturn?'Return':'Paid')+' quantity ('+(piece?'pieces':'boxes')+')',piece?'pieceQty':'qty',piece?paid:Number(it.qty||0))}${mixed?field('Loose pieces','pieceQty',it.pieceQty||0):''}</div>
  ${!opening&&!isReturn?`<div class="row2">${field('Free '+(piece?'pieces':'boxes'),piece?'freePieceQty':'freeQty',piece?free:Number(it.freeQty||0))}${mixed?field('Free loose pieces','freePieceQty',it.freePieceQty||0):''}</div>`:''}
  <div class="row2">${field((opening?'Cost':'Rate')+' per '+unit+(opening?' (incl. GST)':''),rateKey,Number(it[rateKey]||0)/(piece?p:1))}${!isReturn&&kind!=='openingEdit'?field('MRP per '+unit+' (incl. GST)','mrp',Number(it.mrp||0)/(piece?p:1)):''}</div>
@@ -4623,6 +4661,128 @@ document.addEventListener('click',hwReleasePointer,true);
 window.addEventListener('blur',hwReleasePointer);
 /* MD-H04: after rotating (or the keyboard resizing the screen), bring the field being typed in back into view */
 window.addEventListener('resize',()=>{const e=document.activeElement;if(e&&/^(INPUT|SELECT|TEXTAREA)$/.test(e.tagName))setTimeout(()=>{if(document.activeElement===e)e.scrollIntoView({block:'center'});},150);});
+/* r35: category materials and corrections to unused saved packing. */
+function packingEditReason(record, item, stock) {
+ if (!isOwner()) return 'Only the owner can edit saved packing.';
+ if (!stock || stock.mergedInto) return 'This product is missing or merged.';
+ if (stock._hasDownstream || hasDownstream(item.sku)) return 'Packing is protected because this product has sales, returns or stock adjustments.';
+ if (CLOUD_MODE && !stock._historyTracked) return 'Older cloud history is not verified. Packing is protected.';
+ if (!record || record.status === 'pending') return 'Finish the opening import before editing packing.';
+ const rows = record.items.filter(row => row.sku === item.sku);
+ if (!rows.length || rows.some(row => Number(row.piecesPerBox) !== Number(stock.piecesPerBox))) return 'Saved packing differs from current stock. Reload and review the source entry.';
+ const sourceQty = rows.reduce((sum, row) => sum + units(row, 'purchase'), 0);
+ if (sourceQty !== Number(stock.qty)) return 'This entry does not account for all current stock. Packing cannot be changed across multiple entries.';
+ if (db.quotations.some(q => q.status !== 'converted' && q.items?.some(row => row.stockId === item.sku))) return 'This product is in a saved quotation. Review that quotation before correcting packing.';
+ return '';
+}
+function savedPackingContext(kind) {
+ return kind === 'purchaseEdit' ? db.purchases.find(row => row.id === billDetailCtx.id) : kind === 'openingEdit' ? db.openingStock.find(row => row.id === openingDetailCtx.id) : null;
+}
+async function openSavedPacking(stockId) {
+ return guarded('packingEdit', async () => {
+  if (!isOwner()) throw Error('Only the owner can edit saved packing.');
+  if (CLOUD_MODE) {
+   const scope = hwQueueScope();
+   const records = await Promise.all(['purchases', 'openingStock', 'quotations'].map(fetchAllCloudDocs));
+   hwSessionCheck(scope);
+   records.forEach((rows, i) => { db[['purchases', 'openingStock', 'quotations'][i]] = rows; });
+  }
+  const stock = stockById(stockId);
+  if (!stock) throw Error('Product missing.');
+  const sources = [...db.purchases.map(record => ({record, type:'purchase'})), ...db.openingStock.map(record => ({record, type:'opening'}))].filter(({record}) => record.items?.some(it => it.sku === stock.id));
+  if (sources.length !== 1) throw Error('Packing correction needs a single saved source entry. This product has '+sources.length+' source entries; review its history.');
+  const {record, type} = sources[0], item = record.items.find(it => it.sku === stock.id);
+  const reason = packingEditReason(record, item, stock);
+  if (reason) throw Error(reason);
+  if (type === 'opening') openOpeningStockDetail(record.id);
+  else openBillDetail('purchase', record.id);
+ });
+}
+async function addMaterialType(cat, index) {
+ return guarded('materials', async () => {
+  if (!isOwner()) throw Error('Only the owner can manage material types.');
+  const input = document.getElementById('newMaterial_'+index), name = input?.value.trim();
+  if (!name) throw Error('Enter a material type.');
+  if (name.length > 80) throw Error('Use at most 80 characters for a material type.');
+  const add = categories => {
+   if (!Object.hasOwn(categories, cat)) throw Error('Category changed. Reopen the manager.');
+   const materials = categories[cat].materials || [];
+   if (materials.some(value => value.toLowerCase() === name.toLowerCase())) throw Error('This material type already exists.');
+   categories[cat].materials = materials.concat(name);
+   return categories;
+  };
+  if (CLOUD_MODE) {
+   const ref = fsDB.collection('categories').doc('main');
+   let saved;
+   await fsDB.runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    saved = add(clone(snap.exists ? snap.data().data : db.categories));
+    tx.set(ref, {data:saved});
+   });
+   db.categories = saved;
+  } else localCommit(state => { add(state.categories); auditIn(state, 'Material type added', cat+' / '+name); });
+  renderCategoryManagerBody();
+ });
+}
+async function saveProductMaterial(stockId) {
+ return guarded('materials', async () => {
+  if (!isOwner()) throw Error('Only the owner can change a saved product material.');
+  const s = stockById(stockId), material = document.getElementById('stockMaterial').value;
+  if (!s || s.mergedInto) throw Error('Product missing or merged.');
+  if (material === (s.material || '')) return;
+  const check = (stock, categories) => {
+   if (stock.category !== s.category || (stock.material || '') !== (s.material || '')) throw Error('Product changed. Reload it.');
+   if (material && !(categories[stock.category]?.materials || []).includes(material)) throw Error('Material type changed. Reopen the product.');
+   if (db.stock.some(other => other.id !== stock.id && !other.mergedInto && productIdentityKey(other) === productIdentityKey({...stock, material}))) throw Error('Another product already uses these details. Review duplicates before changing its material.');
+  };
+  if (CLOUD_MODE) {
+   const ref = fsDB.collection('stock').doc(s.id), cats = fsDB.collection('categories').doc('main');
+   await fsDB.runTransaction(async tx => {
+    const [snap, categorySnap] = await Promise.all([tx.get(ref), tx.get(cats)]);
+    if (!snap.exists || snap.data().mergedInto) throw Error('Product missing or merged.');
+    const stock = {...snap.data(), id:s.id}; check(stock, categorySnap.exists ? categorySnap.data().data : {});
+    tx.update(ref, {material, identityKey:productIdentityKey({...stock, material})});
+    tx.set(fsDB.collection('auditLog').doc(uid()), {action:'Product material changed', detail:s.id+' / '+(s.material || '(none)')+' → '+(material || '(none)'), role:serverRole, at:new Date().toISOString(), createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+   });
+  } else localCommit(state => { const stock = stockById(s.id, state); check(stock, state.categories); stock.material = material; stock.identityKey = productIdentityKey(stock); auditIn(state, 'Product material changed', s.id+' / '+material); });
+  syncCatalogItem(); alert('Product material saved.'); render();
+ });
+}
+function packingReplacementUpdates(current, draft, stocks, type) {
+ const changes = {}, original = economicGroups(current, type === 'opening');
+ for (const id of new Set(draft.map(row => row.sku))) {
+  const before = current.items.filter(row => row.sku === id), after = draft.filter(row => row.sku === id);
+  if (!before.length) throw Error('Product cannot be changed on a saved incoming entry.');
+  const oldPacking = Number(before[0].piecesPerBox), packing = Number(after[0].piecesPerBox);
+  if (after.some(row => Number(row.piecesPerBox) !== packing)) throw Error('All lines for the same product must use the same packing.');
+  if (packing === oldPacking) continue;
+  const stock = stocks[id], reason = packingEditReason(current, before[0], stock && {...stock, id});
+  if (reason) throw Error(reason);
+  if (!Number.isSafeInteger(packing) || packing < 1) throw Error('Pieces per box must be a positive whole number.');
+  if (before.some(row => Number(row.piecesPerBox) !== oldPacking) || Number(stock.qty) !== original[id].qty) throw Error('Packing history is inconsistent. Review the source entry.');
+  // Keep the saved source and live stock in the same transaction. Existing financial
+  // arithmetic recomputes piece quantity and average cost from this corrected source.
+  const allPieces = before.every(row => incomingMode(row) === 'piece');
+  changes[id] = {piecesPerBox:packing, _packingCorrected:true, purchaseRate:Number(stock.purchaseRate || 0)*(allPieces ? packing/oldPacking : 1), mrp:Number(stock.mrp || 0)*(allPieces ? packing/oldPacking : 1)};
+ }
+ return changes;
+}
+const hwR34StockDetail = renderStockDetail;
+renderStockDetail = function () {
+ const original = hwR34StockDetail(), s = db.stock.find(row => row.id === billDetailCtx.stockId);
+ if (!s) return original;
+ const options = [...new Set(['', s.material || '', ...(db.categories[s.category]?.materials || [])])];
+ const controls = '<div class="card"><h3>Product packing and material</h3><p class="step">'+escapeHtml(s.piecesPerBox || 1)+' pieces per box</p>'+(isOwner() ?
+  '<button class="btn btn-ghost" onclick="openSavedPacking(\''+inlineValue(s.id)+'\')">Edit qty per box in saved entry</button><p class="step">Use the original purchase or opening entry. Packing can be corrected before sales, returns or stock adjustments, when that entry accounts for all this stock.</p><div class="field"><label for="stockMaterial">Material type</label><select id="stockMaterial">'+options.map(value => '<option value="'+escapeHtml(value)+'" '+((s.material || '') === value ? 'selected' : '')+'>'+escapeHtml(value || 'Not specified')+'</option>').join('')+'</select></div><button class="btn btn-primary" onclick="saveProductMaterial(\''+inlineValue(s.id)+'\')">Save material type</button><button class="btn btn-ghost" style="margin-top:8px" onclick="openCategoryManager()">Manage material types</button>' :
+  '<p class="step">Material type: '+escapeHtml(s.material || 'Not specified')+'. The owner manages material types and saved packing.</p>')+'</div>';
+ return controls+original;
+};
+Object.assign(window, {openSavedPacking, addMaterialType, saveProductMaterial});
+
+function assertCurrentPacking(item, stock){
+ if(!stock||Number(item.piecesPerBox)!==Number(stock.piecesPerBox))throw Object.assign(Error('Product packing changed. Reopen the product or edit the pending entry before saving.'),{notDispatched:true});
+}
+
 const cloudStarting = initCloudIfConfigured();
 updateCloudBadge();
 if(!cloudStarting){
@@ -4633,3 +4793,4 @@ if(!cloudStarting){
 </script>
 </body>
 </html>
+
