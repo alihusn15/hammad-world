@@ -1,9 +1,9 @@
 /* HAMMAD WORLD static app shell only. Never cache API calls or account data. */
-const VERSION='2026.10.01-r36-transaction-reliability';
+const VERSION='2026.10.02-r38-report-complete';
 const BASE=new URL('./',self.location.href);
 const PREFIX='hw-shell-'+BASE.pathname+'-';
 const CACHE=PREFIX+VERSION;
-const FILES=['index.html','vendor/firebase-app-compat.js','vendor/firebase-auth-compat.js','vendor/firebase-firestore-compat.js','manifest.webmanifest','icon.png','vendor/heic2any.min.js'];
+const FILES=['index.html','vendor/firebase-app-compat.js','vendor/firebase-auth-compat.js','vendor/firebase-firestore-compat.js','manifest.webmanifest','icon.png','icon-192.png','icon-512.png','vendor/heic2any.min.js'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const cache=await caches.open(CACHE);
  for(const file of FILES){const request=new Request(new URL(file,BASE),{cache:'reload'});const response=await fetch(request);if(!response.ok)throw Error('Offline file unavailable: '+file);if(file==='index.html'&&!(await response.clone().text()).includes(VERSION))throw Error('Upload the matching HTML before activating this offline version.');await cache.put(request,response);}
