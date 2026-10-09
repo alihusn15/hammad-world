@@ -614,12 +614,11 @@ function renderDashboard(){
   const purchaseTotal=todayPurchases.reduce((n,p)=>n+purchaseInvoiceTotal(p),0);
   const purchaseCashPaid=todayPurchases.reduce((n,p)=>n+Number(p.amountPaid??purchaseInvoiceTotal(p)),0);
   const stockValue = stockValueTotal();
-  const lowStock = db.stock.filter(isOwnerLowStock).sort((a,b)=>a.qty/(a.piecesPerBox||1)-b.qty/(b.piecesPerBox||1)), outStock = db.stock.filter(isOutOfStock);
+  const lowStock = db.stock.filter(s=>s.qty>0 && s.qty<=lowStockThresholdFor(s));
   const billsToday = todaySales.length + todayPurchases.length;
 
   let alerts = '';
-  if(lowStock.length) alerts += `<div class="stat" style="background:var(--amber-100);border-color:transparent;margin-bottom:8px;cursor:pointer;" onclick="stockFilter='low';setScreen('stock')"><div style="font-size:13px;color:var(--amber-600);font-weight:700;">⚠ ${escapeHtml(lowStock.length)} product${lowStock.length===1?'':'s'} at or below the low-stock level (15 boxes / 15 pieces unless set on the product)</div>${lowStock.slice(0,5).map(s=>`<div style="font-size:12px;margin-top:4px;">${escapeHtml(s.itemName)}${s.size?' · '+escapeHtml(s.size):''}${s.batch?' · '+escapeHtml(s.batch):''} — <b>${escapeHtml(stockQuantityLabel(s))}</b> left (alert at ${escapeHtml(ownerLowStockLabel(s))})</div>`).join('')}${lowStock.length>5?`<div style="font-size:12px;margin-top:4px;">…and ${escapeHtml(lowStock.length-5)} more. Tap to see all.</div>`:''}</div></div>`;
-  if(outStock.length) alerts += `<div class="stat" style="background:var(--red-100);border-color:transparent;margin-bottom:8px;cursor:pointer;" onclick="stockFilter='out';setScreen('stock')"><div style="font-size:13px;color:var(--red-700);font-weight:700;">⛔ ${escapeHtml(outStock.length)} product${outStock.length===1?'':'s'} out of stock — tap to see.</div></div>`;
+  if(lowStock.length) alerts += `<div class="stat" style="background:var(--amber-100);border-color:transparent;margin-bottom:8px;"><div style="font-size:13px;color:var(--amber-600);font-weight:700;">⚠ ${escapeHtml(lowStock.length)} product(s) down to less than a box — check Stock.</div></div>`;
   if(!alerts) alerts = `<div class="stat" style="background:#EFE3D6;border-color:transparent;"><div style="font-size:13px;color:var(--green-heading);font-weight:700;">✓ No stock alerts right now.</div></div>`;
 
   return `
@@ -1381,15 +1380,14 @@ window.saveSaleReturn = saveSaleReturn;
 let stockFilter = 'all';
 function renderStock(){
   let rows = db.stock.slice();
-  if(stockFilter==='low') rows = rows.filter(isOwnerLowStock).sort((a,b)=>a.qty/(a.piecesPerBox||1)-b.qty/(b.piecesPerBox||1));
-  else if(stockFilter==='out') rows = rows.filter(isOutOfStock);
+  if(stockFilter==='low') rows = rows.filter(s=>s.qty>0 && s.qty<=lowStockThresholdFor(s));
   const q = (document.getElementById('stockSearch')?.value||'').toLowerCase();
   if(q) rows = rows.filter(s=>s.itemName.toLowerCase().includes(q));
   const hwStockQuery=document.getElementById('stockSearch')?.value||'';const hwTotalRows=rows.length;rows=rows.slice(0,hwStockPage*100);
   const rowsHtml = rows.map(s=>{
     const boxes = Math.floor(s.qty/(s.piecesPerBox||1));
     const loose = s.qty % (s.piecesPerBox||1);
-    const tag = s.qty<=0 ? '<span class="tag low">Out of stock</span>' : s.qty<=ownerLowStockLevel(s) ? '<span class="tag low">Low stock</span>' : '<span class="tag ok">In stock</span>';
+    const tag = s.qty<=lowStockThresholdFor(s) ? '<span class="tag low">Low stock</span>' : '<span class="tag ok">In stock</span>';
     return `
     <div class="list-row" style="cursor:pointer;" onclick="openStockDetail('${inlineValue(s.id)}')">
       <div><div class="li-main">${escapeHtml(s.itemName)}</div><div class="li-sub">${escapeHtml(s.category)} › ${escapeHtml(s.subcategory)||'—'} • ${escapeHtml(s.sku)}</div>${tag}</div>
@@ -1401,7 +1399,6 @@ function renderStock(){
     <div class="segment">
       <button class="${escapeHtml(stockFilter==='all'?'active':'')}" onclick="stockFilter='all';render()">All</button>
       <button class="${escapeHtml(stockFilter==='low'?'active':'')}" onclick="stockFilter='low';render()">Low stock</button>
-      <button class="${escapeHtml(stockFilter==='out'?'active':'')}" onclick="stockFilter='out';render()">Out of stock</button>
     </div>
     ${isOwner() ? `<button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('findDuplicates')">🔍 Find duplicate or hidden products</button>
     <button class="btn btn-ghost" style="margin-bottom:10px;" onclick="setScreen('openingStockHistory')">📋 Opening stock history</button>` : ''}
@@ -1797,25 +1794,19 @@ window.saveStockAdjustment = saveStockAdjustment;
 
 function saveLowStockThreshold(stockId){
   if(!requireOwner())return;
+  const boxes = Number(document.getElementById('lowStockBoxes').value);
+  if(boxes<0 || isNaN(boxes)){ alert('Enter a valid number of boxes.'); return; }
   const s = db.stock.find(x=>x.id===stockId);
   if(!s) return;
-  const raw = String(document.getElementById('lowStockBoxes').value).trim(), p = Number(s.piecesPerBox)||1;
-  let level = null;
-  if(raw!==''){
-    const n = Number(raw);
-    if(!Number.isFinite(n) || n<0 || !Number.isInteger(n)){ alert('Enter a whole number of '+ownerLowStockUnit(s)+', or leave it blank for the default.'); return; }
-    level = n*p;
-  }
-  const label = level==null ? 'the default ('+(p===1?HW_LOW_STOCK_DEFAULT+' pieces':HW_LOW_STOCK_DEFAULT+' boxes')+')' : raw+' '+ownerLowStockUnit(s);
+  const thresholdPieces = boxes * (s.piecesPerBox||1);
   if(CLOUD_MODE){
-    hwWriteStock(fsDB.collection('stock').doc(stockId),{ownerLowStockLevel: level==null ? firebase.firestore.FieldValue.delete() : level})
-      .then(()=>{ if(level==null) delete s.ownerLowStockLevel; else s.ownerLowStockLevel = level; safeRender(); alert('Low stock alert set to '+label+'.'); })
-      .catch(e=>alert('Could not save: '+e.message));
+    hwWriteStock(fsDB.collection('stock').doc(stockId),{lowStockThreshold: thresholdPieces}).catch(e=>alert('Could not save: '+e.message));
   } else {
-    try{ localCommit(state=>{ const row=state.stock.find(x=>x.id===stockId); if(level==null) delete row.ownerLowStockLevel; else row.ownerLowStockLevel = level; auditIn(state,'Low stock alert set',stockId+' '+label); }); }
-    catch(e){ alert(e.message); return; }
-    render(); alert('Low stock alert set to '+label+'.');
+    s.lowStockThreshold = thresholdPieces;
+    saveDB(db);
+    render();
   }
+  alert('Low stock alert updated.');
 }
 window.saveLowStockThreshold = saveLowStockThreshold;
 function renderStockDetail(){
@@ -1864,11 +1855,11 @@ function renderStockDetail(){
     ` : ''}
     <div class="card">
       <h3>Low stock alert</h3>
-      <div class="step">The owner portal warns when this product drops to this level or below. Currently: <b>${escapeHtml(ownerLowStockLabel(s))}</b>${s.ownerLowStockLevel!=null?' (set for this product)':s.lowStockThreshold!=null?' (older setting for this product)':' (default)'}. Default is ${HW_LOW_STOCK_DEFAULT} boxes, or ${HW_LOW_STOCK_DEFAULT} pieces for single-piece products. This does not change the public catalogue.</div>
-      ${isOwner() ? `<div class="row2">
-        <div class="field"><label>Alert at (${escapeHtml(ownerLowStockUnit(s))})</label><input id="lowStockBoxes" type="number" min="0" step="1" placeholder="Blank = default" value="${escapeHtml(s.ownerLowStockLevel!=null?String(Math.floor(Number(s.ownerLowStockLevel)/(Number(s.piecesPerBox)||1))):'')}"/></div>
+      <div class="step">Flag this product as "Low stock" once it drops to this many boxes or fewer. Default is 1 box.</div>
+      <div class="row2">
+        <div class="field"><label>Boxes</label><input id="lowStockBoxes" type="number" value="${escapeHtml(entryNumber(Math.floor(lowStockThresholdFor(s)/(s.piecesPerBox||1))))}"/></div>
         <button class="btn btn-ghost" style="align-self:flex-end;" onclick="saveLowStockThreshold('${inlineValue(s.id)}')">Save</button>
-      </div>` : ''}
+      </div>
     </div>
     ${isOwner() ? `
     <div class="card">
@@ -2340,16 +2331,6 @@ function totalToPay(){ return db.parties.filter(p=>p.type==='supplier').reduce((
 function totalToCollect(){ return db.parties.filter(p=>p.type==='customer').reduce((a,p)=>a+Math.max(0,partyBalance(p.id)),0); }
 function stockValueTotal(){ return db.stock.reduce((a,s)=>a + (s.avgCost!=null ? s.qty*s.avgCost : (s.qty/(s.piecesPerBox||1))*(s.purchaseRate||0)),0); }
 function lowStockThresholdFor(s){ return s.lowStockThreshold!=null ? s.lowStockThreshold : (s.piecesPerBox||1); }
-/* r39: owner low-stock alert. Default 15 boxes, or 15 pieces for single-piece products.
-   A product's own alert level wins; an older per-product level is kept. The public
-   catalogue still uses lowStockThresholdFor() above, so its labels do not change. */
-const HW_LOW_STOCK_DEFAULT=15;
-function ownerLowStockLevel(s){const p=Number(s.piecesPerBox)||1;if(s.ownerLowStockLevel!=null&&Number.isFinite(Number(s.ownerLowStockLevel)))return Number(s.ownerLowStockLevel);if(s.lowStockThreshold!=null)return Number(s.lowStockThreshold);return HW_LOW_STOCK_DEFAULT*p;}
-function ownerLowStockUnit(s){return (Number(s.piecesPerBox)||1)===1?'pieces':'boxes';}
-function ownerLowStockLabel(s){const p=Number(s.piecesPerBox)||1,n=ownerLowStockLevel(s);return p===1?n+' pieces':(n%p?stockQuantityLabel({qty:n,piecesPerBox:p}):(n/p)+' boxes');}
-function isActiveStock(s){return !s.mergedInto&&!s.discontinued;}
-function isOwnerLowStock(s){return isActiveStock(s)&&Number(s.qty)>0&&Number(s.qty)<=ownerLowStockLevel(s);}
-function isOutOfStock(s){return isActiveStock(s)&&Number(s.qty)<=0;}
 
 /* ===================== PUBLIC CATALOG SYNC =====================
    Mirrors ONLY customer-safe fields into a separate "catalog" collection
@@ -3884,7 +3865,7 @@ document.addEventListener('keydown', function(e){
 });
 
 /* HAMMAD WORLD reliability revision 2026-09-18. Financial amounts are INR. */
-const HW_VERSION='2026.10.09-r39-low-stock-alert';
+const HW_VERSION='2026.10.02-r38-report-complete';
 let hwExpectedLocal=localStorage.getItem(DB_KEY), hwCloudReady=false, hwCloudError='', hwBusy=new Set(), hwPendingOpenings=[];
 const hwCollections=['stock','sales','purchases','saleReturns','purchaseReturns','openingStock','parties','payments','expenses','staff','staffLedger','quotations','auditLog'];
 // Staff subscribe to the shop records needed to verify deliveries and enter bills.

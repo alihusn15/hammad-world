@@ -1,5 +1,5 @@
 /* HAMMAD WORLD static app shell only. Never cache API calls or account data. */
-const VERSION='2026.10.09-r39-low-stock-alert';
+const VERSION='2026.10.02-r38-report-complete';
 const BASE=new URL('./',self.location.href);
 const PREFIX='hw-shell-'+BASE.pathname+'-';
 const CACHE=PREFIX+VERSION;
